@@ -380,7 +380,14 @@ for commit in commits:
         revert_ref = "reverts/r%d" % revert_svnrev
         print("\tgrad: Checking %s" % revert_ref)
         subprocess.Popen(["git", "reset", "-q", "--hard", "HEAD"]).wait()
-        r = subprocess.Popen(["git", "merge", "--quiet", "--squash", revert_ref]).wait()
+        p = subprocess.Popen(
+            ["git", "merge", "--quiet", "--squash", revert_ref],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            )
+        p.stdout.readlines() # Discard
+        p.stderr.readlines() # Discard
+        r = p.wait()
         if r != 0:
             continue
         r = subprocess.Popen(["git", "diff", "--quiet", "--cached"]).wait()
@@ -403,7 +410,7 @@ for commit in commits:
     # Apply reverts
     local_reverts = []
     if svnrev in revert_svnrevs:
-        print("\tgrevert: Checking r%d" % svnrev)
+        print("\trevert: Checking r%d" % svnrev)
         for revert_svnrev in revert_svnrevs:
             if revert_svnrev > svnrev:
                 continue
@@ -416,10 +423,12 @@ for commit in commits:
 
     # Apply svn HEAD
     if graduated:
+        print("\tApplying graduated commit")
         r = subprocess.Popen(["git", "merge", "--no-ff", graduated]).wait()
         print("r=%d" % r)
         assert r == 0
     elif not local_reverts:
+        print("\tApplying r%d..." % svnrev)
         r = subprocess.Popen(["git", "merge", h]).wait()
         if r != 0:
             # Make revert
