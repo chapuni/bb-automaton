@@ -184,7 +184,7 @@ def collect_commits(master, upstream):
             while True:
                 line=p.stdout.readline()
                 assert line != ""
-                if re_match(r'^([^:]+):([^:]+):(\d+)', line, r):
+                if re_match(r'^([^:]+):([^:]+):(\d+)$', line.rstrip(), r):
                     break
                 commit["comments"] += line
             m=r["m"]
