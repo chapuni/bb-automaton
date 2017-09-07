@@ -119,33 +119,6 @@ def revert(h):
     p.wait()
     return m.group(1)
 
-def merge_reverts(h, hr, hr2=None):
-    r = subprocess.Popen(["git", "checkout", "-f", h]).wait()
-    assert r == 0
-
-    # FIXME: Enumerate parents in h2.
-    merge_h = [hr]
-    assert hr2 is None
-
-    p = subprocess.Popen(
-        [
-            "git", "merge", "--no-ff", h
-            ] + merge_h,
-        stdout=subprocess.PIPE,
-        ).wait()
-    lines = ''
-    new_h = None
-    for line in p.stdout:
-        lines += line
-        m = re.match(r'^HEAD is now at\s+([0-9a-f]+)', line)
-        if not m:
-            continue
-        assert new_h is None
-        new_h = m.group(1)
-
-    assert p.wait() == 0 and new_h is not None, "====\n%s====" % lines
-    return new_h
-
 # Collect commits from git-svn
 def collect_commits(master, upstream):
     p = subprocess.Popen(
