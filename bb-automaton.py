@@ -344,11 +344,11 @@ for commit in collect_commits("master", upstream_commit):
 
     # Check graduation
     # FIXME: Skip if change is nothing to do.
-    graduated = None
+    graduated = []
     for revert_svnrev in list(revert_svnrevs):
         revert_ref = "reverts/r%d" % revert_svnrev
         print("\tgrad: Checking %s" % revert_ref)
-        subprocess.Popen(["git", "reset", "-q", "--hard", "HEAD"]).wait()
+        subprocess.Popen(["git", "reset", "-q", "--hard", svn_commit]).wait()
         p = subprocess.Popen(
             ["git", "merge", "--squash", revert_ref],
             stdout=subprocess.PIPE,
@@ -370,16 +370,16 @@ for commit in collect_commits("master", upstream_commit):
         if r != 0:
             continue
         # Merge isn't affected. Assume graduated.
-        print("\t%s is graduated." % revert_ref)
-        revert_svnrevs.remove(revert_svnrev)
+        print("\tgrad: %s is graduated." % revert_ref)
 
         # Make "Revert Revert" from svn_commit.
         # Anyways, I cannot revert reverts/rXXXXXX.
-        graduated = revert(svn_commit)
+        graduated.append(revert(svn_commit))
         commit["files"]=json.dumps([]) # FIXME: Would it be partial?
 
         r = subprocess.Popen(["git", "branch", "-D", revert_ref]).wait()
         assert r == 0
+        revert_svnrevs.remove(revert_svnrev)
 
     subprocess.Popen(["git", "reset", "-q", "--hard", master]).wait()
 
@@ -406,7 +406,7 @@ for commit in collect_commits("master", upstream_commit):
 
     # Apply svn HEAD
     if graduated:
-        print("\tApplying graduated commit")
+        print("\tgrad: Applying graduated commit: %s" % graduated)
         p = subprocess.Popen(
             ["git", "merge", "--no-ff"] + graduated,
             stdout=subprocess.PIPE,
