@@ -143,6 +143,9 @@ class RevertController:
         # Order by reverse revs
         self._svnrevs = []
 
+        # rev:set() changed files
+        self._changes = {}
+
     # For iterator
     def __iter__(self):
         return self._svnrevs.__iter__()
@@ -156,6 +159,25 @@ class RevertController:
     @staticmethod
     def refspec(svnrev):
         return "reverts/r%d" % svnrev
+
+    def changes(self, svnrev):
+        assert svnrev in self._svnrevs
+        if svnrev in self._changes:
+            return self._changes[svnrev]
+
+        refspec = self.refspec(svnrev)
+
+        p = subprocess.Popen(
+            ["git", "diff", "--name-only", refspec, "%s^" % refspec],
+            stdout=subprocess.PIPE,
+            )
+
+        changes = set()
+        for line in p.stdout:
+            changes.add(line.rstrip())
+
+        self._changes[svnrev] = changes
+        return changes
 
     def register(self, svnrev):
         self._svnrevs.append(svnrev)
@@ -401,6 +423,12 @@ for commit in collect_commits("master", upstream_commit):
     graduated = []
     for revert_svnrev in list(reverts):
         revert_ref = reverts.refspec(revert_svnrev)
+
+        # Don't check if each revert doesn't touch the commit.
+        if not commit["files"].intersection(reverts.changes(revert_svnrev)):
+            print("\tgrad: Skipping %s" % revert_ref)
+            continue
+
         print("\tgrad: Checking %s" % revert_ref)
         run_cmd(["git", "reset", "-q", "--hard", svn_commit])
         p = subprocess.Popen(
