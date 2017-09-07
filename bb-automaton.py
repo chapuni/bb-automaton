@@ -8,7 +8,7 @@ import sys
 from urllib import *
 
 git_dir = '/home/chapuni/bb-automaton/llvm-project'
-bb_url = 'http://bb9.pgr.jp:8010/'
+bb_url = 'http://aws-ubu.pgr.jp:8010/'
 api_url = bb_url+'api/v2/'
 change_url = bb_url+"change_hook/base"
 upstream_commit = "origin/master"
