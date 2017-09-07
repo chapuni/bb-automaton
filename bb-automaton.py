@@ -11,8 +11,7 @@ git_dir = '/home/chapuni/bb-automaton/llvm-project'
 bb_url = 'http://aws-ubu.pgr.jp:8010/'
 api_url = bb_url+'api/v2/'
 change_url = bb_url+"change_hook/base"
-upstream_commit = "origin/master"
-upstream_commit = "test/master"
+upstream_commit = "origin/master" # May be overridden by test/master
 
 def re_match(expr, line, r):
     m = re.match(expr, line)
@@ -338,6 +337,9 @@ for line in p.stdout:
         svnrev = int(r["m"].group(1))
         print("reverts/r%d" % svnrev)
         revert_svnrevs.append(svnrev)
+    elif re_match(r'^.\s+test/master', line, r):
+        # Override upstream_commit for testing
+        upstream_commit = "test/master"
     elif re_match(r'^.\s+master\s+([0-9a-f]+)', line, r):
         master = r["m"].group(1)
 
