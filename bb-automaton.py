@@ -106,7 +106,7 @@ def get_culprit_ss(builder):
 
 # Create revert object.
 def revert(h):
-    r = subprocess.Popen(["git", "checkout", "-f", h]).wait()
+    r = subprocess.Popen(["git", "reset", "-q", '--hard', h]).wait()
     assert r == 0
 
     p = subprocess.Popen(
@@ -257,6 +257,10 @@ p.wait()
 
 assert master is not None
 
+# Make sure we are alywas on detached head.
+r = subprocess.Popen(["git", "checkout", "-qf", master]).wait()
+assert r == 0
+
 revert_svnrevs = list(reversed(sorted(revert_svnrevs)))
 
 # Seek culprit rev, rewind and revert
@@ -283,7 +287,6 @@ if culprit_svnrev is not None:
         h = m.group(1)
         break
 
-    assert h is not None
     revert_ref = "reverts/r%d" % culprit_svnrev
 
     # Confirm if the revert exists.
@@ -305,11 +308,8 @@ if culprit_svnrev is not None:
         invalidated_ssid = "%d..%d" % (first_ss["ssid"], sourcestamps["sourcestamps"][0]["ssid"])
 
         # Rewind master to one commit before the revertion.
-        # Note: HEAD should not be master, since I will work on detached HEAD.
         master = "%s^" % first_ss["project"]
-        r = subprocess.Popen(["git", "checkout", "-qf", "%s" % master]).wait()
-        assert r == 0
-        r = subprocess.Popen(["git", "branch", "-f", "master", "HEAD"]).wait()
+        r = subprocess.Popen(["git", "branch", "-f", "master", master]).wait()
         assert r == 0
 
         revert_h = revert(h)
@@ -341,9 +341,7 @@ for commit in collect_commits("master", upstream_commit):
     print("========Processing r%d" % svnrev)
 
     # Check graduation
-    r = subprocess.Popen(["git", "checkout", "-qf", h]).wait()
-    assert r == 0
-
+    # FIXME: Skip if change is nothing to do.
     graduated = None
     for revert_svnrev in list(revert_svnrevs):
         revert_ref = "reverts/r%d" % revert_svnrev
@@ -373,8 +371,7 @@ for commit in collect_commits("master", upstream_commit):
         r = subprocess.Popen(["git", "branch", "-D", revert_ref]).wait()
         assert r == 0
 
-    r = subprocess.Popen(["git", "checkout", "-qf", master]).wait()
-    subprocess.Popen(["git", "reset", "-q", "--hard", "HEAD"]).wait()
+    subprocess.Popen(["git", "reset", "-q", "--hard", master]).wait()
 
     # Apply reverts
     local_reverts = []
@@ -389,6 +386,7 @@ for commit in collect_commits("master", upstream_commit):
         assert r == 0
         print("\tApplied %s" % str(local_reverts))
         commit["files"]=json.dumps([])
+        # Note: master is unknown here!
 
     # Apply svn HEAD
     if graduated:
@@ -408,8 +406,8 @@ for commit in collect_commits("master", upstream_commit):
             r = subprocess.Popen(["git", "branch", "-f", revert_ref, revert_h]).wait()
             assert r == 0
             revert_svnrevs.insert(0, svnrev)
-            r = subprocess.Popen(["git", "reset", "-q", "--hard", "HEAD"]).wait()
-            r = subprocess.Popen(["git", "checkout", "-qf", master]).wait()
+            r = subprocess.Popen(["git", "reset", "-q", "--hard", master]).wait()
+            assert r == 0
             r = subprocess.Popen(["git", "merge", revert_ref]).wait()
             print("\tApplied new %s" % revert_ref)
 
