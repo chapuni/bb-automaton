@@ -266,6 +266,7 @@ revert_svnrevs = list(reversed(sorted(revert_svnrevs)))
 # Seek culprit rev, rewind and revert
 invalidated_ssid = None
 if culprit_svnrev is not None:
+    # FIXME: h can be obtained in merged master w/o traversing.
     p = subprocess.Popen(
         [
             "git", "log",
@@ -302,6 +303,7 @@ if culprit_svnrev is not None:
     else:
         # Calculate range(ssid) to invalidate previous builds
         assert first_ss is not None
+        # Get the latest ss.
         resp = urlopen(api_url+'sourcestamps?limit=1&order=-ssid')
         sourcestamps = json.load(resp)
         resp.close()
@@ -371,9 +373,10 @@ for commit in collect_commits("master", upstream_commit):
         print("\t%s is graduated." % revert_ref)
         revert_svnrevs.remove(revert_svnrev)
 
-        # Make "Revert Revert"
+        # Make "Revert Revert" from svn_commit.
+        # Anyways, I cannot revert reverts/rXXXXXX.
         graduated = revert(svn_commit)
-        commit["files"]=json.dumps([])
+        commit["files"]=json.dumps([]) # FIXME: Would it be partial?
 
         r = subprocess.Popen(["git", "branch", "-D", revert_ref]).wait()
         assert r == 0
@@ -414,10 +417,12 @@ for commit in collect_commits("master", upstream_commit):
         assert p.wait() == 0, "o<%s>\ne<%s>" % (o, e)
     elif not local_reverts:
         print("\tApplying r%d..." % svnrev)
+
+        # FIXME: Add svnrev
         r = subprocess.Popen(["git", "merge", svn_commit]).wait()
+
         if r != 0:
-            # Make revert
-            print("r=%d" % r)
+            # Chain revert
             revert_h = revert(svn_commit)
             commit["files"]=json.dumps([])
             revert_ref = "reverts/r%d" % svnrev
@@ -426,6 +431,7 @@ for commit in collect_commits("master", upstream_commit):
             revert_svnrevs.insert(0, svnrev)
             r = subprocess.Popen(["git", "reset", "-q", "--hard", master]).wait()
             assert r == 0
+            # FIXME: Add message
             p = subprocess.Popen(
                 ["git", "merge", revert_ref],
                     stdout=subprocess.PIPE,
