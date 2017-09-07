@@ -400,7 +400,7 @@ for commit in collect_commits("master", upstream_commit):
         o = ''.join(p.stdout.readlines())
         e = ''.join(p.stderr.readlines())
         assert p.wait() == 0, "o<%s>\ne<%s>" % (o, e)
-        print("\tApplied %s" % str(local_reverts))
+        print("\trevert: Applied %s" % str(local_reverts))
         commit["files"]=json.dumps([])
         # Note: master is unknown here!
 
