@@ -266,27 +266,14 @@ revert_svnrevs = list(reversed(sorted(revert_svnrevs)))
 # Seek culprit rev, rewind and revert
 invalidated_ssid = None
 if culprit_svnrev is not None:
-    # FIXME: h can be obtained in merged master w/o traversing.
     p = subprocess.Popen(
-        [
-            "git", "log",
-            "--format=%H%N",
-            "origin/master",
-            ],
+        ["git", "merge-base", first_ss["project"], "origin/master"],
         stdout=subprocess.PIPE,
         )
-    h = None
-    for line in p.stdout:
-        m = re.match(r'^([0-9a-f]{40})git-svn-rev:\s+(\d+)', line)
-        if not m:
-            continue
-        svnrev = int(m.group(2))
-        if svnrev != culprit_svnrev:
-            assert svnrev > culprit_svnrev, "rev=%d %s" % (svnrev, m.group(1))
-            continue
-        p.terminate()
-        h = m.group(1)
-        break
+    m = re.match(r'^([0-9a-f]{40})', p.stdout.readline())
+    assert m
+    svn_commit = m.group(1)
+    p.wait()
 
     revert_ref = "reverts/r%d" % culprit_svnrev
 
@@ -314,7 +301,7 @@ if culprit_svnrev is not None:
         r = subprocess.Popen(["git", "branch", "-f", "master", master]).wait()
         assert r == 0
 
-        revert_h = revert(h)
+        revert_h = revert(svn_commit)
         revert_svnrevs.insert(0, culprit_svnrev)
 
         # Register the revert
