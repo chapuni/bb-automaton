@@ -137,6 +137,62 @@ def revert(h, msg=None):
 
     return m.group(1)
 
+# Revert controller
+class RevertController:
+    def __init__(self):
+        # Order by reverse revs
+        self._svnrevs = []
+
+    # For iterator
+    def __iter__(self):
+        return self._svnrevs.__iter__()
+
+    def __next__(self):
+        return self._svnrevs.__next__()
+
+    def __contains__(self, a):
+        return a in self._svnrevs
+
+    @staticmethod
+    def refspec(svnrev):
+        return "reverts/r%d" % svnrev
+
+    def register(self, svnrev):
+        self._svnrevs.append(svnrev)
+        # FIXME: Do smarter!
+        self._svnrevs = list(reversed(sorted(self._svnrevs)))
+
+    def remove(self, svnrev):
+        self._svnrevs.remove(svnrev)
+        r = subprocess.Popen(["git", "branch", "-D", self.refspec(svnrev)]).wait()
+        assert r == 0
+
+    # This moves HEAD
+    def revert(self, h, svnrev):
+        revert_h = revert(h, "Revert r%d" % svnrev)
+        self._svnrevs.insert(0, svnrev)
+        assert len(self._svnrevs) == 1 or self._svnrevs[0] > self._svnrevs[1]
+
+        revert_ref = "reverts/r%d" % svnrev
+        run_cmd(["git", "branch", "-f", revert_ref, revert_h])
+        print("\t*** Revert %s" % revert_ref)
+
+        # Make recommit
+        p = subprocess.Popen(
+            ["git", "cherry-pick", h],
+            stdout=subprocess.PIPE,
+            )
+        line = ''.join(p.stdout.readlines())
+        m = re.match(r'\[detached HEAD\s+([0-9a-f]+)\]', line)
+        assert m, "git-recommit ====\n%s====" % line
+        p.wait()
+        recommit_h = m.group(1)
+
+        recommit_ref = "recommits/r%d" % svnrev
+        r = subprocess.Popen(["git", "branch", "-f", recommit_ref, recommit_h]).wait()
+
+        return revert_h
+
 # Collect commits from git-svn
 def collect_commits(master, upstream):
     p = subprocess.Popen(
@@ -255,7 +311,7 @@ p = subprocess.Popen(
     stdout=subprocess.PIPE,
     )
 
-revert_svnrevs = []
+reverts = RevertController()
 master = None
 
 # git-branch is sorted
@@ -264,7 +320,7 @@ for line in p.stdout:
     if re_match(r'^.\s+reverts/r(\d+)', line, r):
         svnrev = int(r["m"].group(1))
         print("reverts/r%d" % svnrev)
-        revert_svnrevs.append(svnrev)
+        reverts.register(svnrev)
     elif re_match(r'^.\s+test/master', line, r):
         # Override upstream_commit for testing
         upstream_commit = "test/master"
@@ -278,8 +334,6 @@ assert master is not None
 # Make sure we are alywas on detached head.
 run_cmd(["git", "checkout", "-qf", master])
 
-revert_svnrevs = list(reversed(sorted(revert_svnrevs)))
-
 # Seek culprit rev, rewind and revert
 invalidated_ssid = None
 if culprit_svnrev is not None:
@@ -292,7 +346,7 @@ if culprit_svnrev is not None:
     svn_commit = m.group(1)
     p.wait()
 
-    revert_ref = "reverts/r%d" % culprit_svnrev
+    revert_ref = reverts.refspec(culprit_svnrev)
 
     # Confirm if the revert exists.
     p = subprocess.Popen(
@@ -317,8 +371,7 @@ if culprit_svnrev is not None:
         master = "%s^" % first_ss["project"]
         run_cmd(["git", "branch", "-f", "master", master])
 
-        revert_h = revert(svn_commit)
-        revert_svnrevs.insert(0, culprit_svnrev)
+        revert_h = reverts.revert(svn_commit, culprit_svnrev)
 
         # Register the revert
         run_cmd(["git", "branch", "-f", revert_ref, revert_h])
@@ -346,8 +399,8 @@ for commit in collect_commits("master", upstream_commit):
     # Check graduation
     # FIXME: Skip if change is nothing to do.
     graduated = []
-    for revert_svnrev in list(revert_svnrevs):
-        revert_ref = "reverts/r%d" % revert_svnrev
+    for revert_svnrev in list(reverts):
+        revert_ref = reverts.refspec(revert_svnrev)
         print("\tgrad: Checking %s" % revert_ref)
         run_cmd(["git", "reset", "-q", "--hard", svn_commit])
         p = subprocess.Popen(
@@ -378,20 +431,18 @@ for commit in collect_commits("master", upstream_commit):
         graduated.append(revert(svn_commit))
         commit["files"]=set()
 
-        r = subprocess.Popen(["git", "branch", "-D", revert_ref]).wait()
-        assert r == 0
-        revert_svnrevs.remove(revert_svnrev)
+        reverts.remove(revert_svnrev)
 
     run_cmd(["git", "reset", "-q", "--hard", master])
 
     # Apply reverts
     local_reverts = []
-    if svnrev in revert_svnrevs:
+    if svnrev in reverts:
         print("\trevert: Checking r%d" % svnrev)
-        for revert_svnrev in revert_svnrevs:
+        for revert_svnrev in reverts:
             if revert_svnrev > svnrev:
                 continue
-            local_reverts.append("reverts/r%d" % revert_svnrev)
+            local_reverts.append(reverts.refspec(revert_svnrev))
         assert local_reverts
         run_cmd(["git", "merge", "--no-ff"] + local_reverts)
         print("\trevert: Applied %s" % str(local_reverts))
@@ -409,11 +460,9 @@ for commit in collect_commits("master", upstream_commit):
 
         if r != 0:
             # Chain revert
-            revert_h = revert(svn_commit)
+            revert_h = reverts.revert(svn_commit, svnrev)
             commit["files"]=set()
-            revert_ref = "reverts/r%d" % svnrev
-            run_cmd(["git", "branch", "-f", revert_ref, revert_h])
-            revert_svnrevs.insert(0, svnrev)
+            revert_ref = reverts.refspec(svnrev)
             run_cmd(["git", "reset", "-q", "--hard", master])
             # FIXME: Add message
             run_cmd(["git", "merge", revert_ref])
