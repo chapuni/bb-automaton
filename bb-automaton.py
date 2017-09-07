@@ -350,12 +350,12 @@ assert master is not None
 revert_svnrevs = list(reversed(sorted(revert_svnrevs)))
 
 for commit in collect_commits("master", upstream_commit):
-    h = commit["commit"]
+    svn_commit = commit["commit"]
     m = re.match('^r(\d+)', commit["revision"]) # rNNNNNN
     assert m
     svnrev = int(m.group(1))
     props={
-        "commit": h,
+        "commit": svn_commit,
         }
     del commit["commit"]
 
@@ -394,7 +394,7 @@ for commit in collect_commits("master", upstream_commit):
         revert_svnrevs.remove(revert_svnrev)
 
         # Make "Revert Revert"
-        graduated = revert(h)
+        graduated = revert(svn_commit)
         commit["files"]=json.dumps([])
 
         r = subprocess.Popen(["git", "branch", "-D", revert_ref]).wait()
@@ -425,11 +425,11 @@ for commit in collect_commits("master", upstream_commit):
         assert r == 0
     elif not local_reverts:
         print("\tApplying r%d..." % svnrev)
-        r = subprocess.Popen(["git", "merge", h]).wait()
+        r = subprocess.Popen(["git", "merge", svn_commit]).wait()
         if r != 0:
             # Make revert
             print("r=%d" % r)
-            revert_h = revert(h)
+            revert_h = revert(svn_commit)
             commit["files"]=json.dumps([])
             revert_ref = "reverts/r%d" % svnrev
             r = subprocess.Popen(["git", "branch", "-f", revert_ref, revert_h]).wait()
