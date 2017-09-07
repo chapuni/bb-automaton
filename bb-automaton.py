@@ -259,6 +259,33 @@ for builder in builders["builders"]:
 
 # Git
 
+p = subprocess.Popen(
+    ["git", "branch", "-v"],
+    stdout=subprocess.PIPE,
+    )
+
+revert_svnrevs = []
+master = None
+
+# git-branch is sorted
+for line in p.stdout:
+    r={}
+    if re_match(r'^.\s+reverts/r(\d+)', line, r):
+        svnrev = int(r["m"].group(1))
+        print("reverts/r%d" % svnrev)
+        revert_svnrevs.append(svnrev)
+    elif re_match(r'^.\s+test/master', line, r):
+        # Override upstream_commit for testing
+        upstream_commit = "test/master"
+    elif re_match(r'^.\s+master\s+([0-9a-f]+)', line, r):
+        master = r["m"].group(1)
+
+p.wait()
+
+assert master is not None
+
+revert_svnrevs = list(reversed(sorted(revert_svnrevs)))
+
 # Seek culprit rev, rewind and revert
 invalidated_ssid = None
 if culprit_svnrev is not None:
@@ -304,16 +331,16 @@ if culprit_svnrev is not None:
         resp.close()
         invalidated_ssid = "%d..%d" % (first_ss["ssid"], sourcestamps["sourcestamps"][0]["ssid"])
 
-        # Rewind to one commit before the revertion.
-        # FIXME: Traverse "master", not "origin/mater"
-        r = subprocess.Popen(["git", "checkout", "-qf", "%s^" % h]).wait()
+        # Rewind master to one commit before the revertion.
+        # Note: HEAD should not be master, since I will work on detached HEAD.
+        master = "%s^" % first_ss["project"]
+        r = subprocess.Popen(["git", "checkout", "-qf", "%s" % master]).wait()
         assert r == 0
         r = subprocess.Popen(["git", "branch", "-f", "master", "HEAD"]).wait()
         assert r == 0
-        # FIXME: Collect branches.
 
-        # Reset master
         revert_h = revert(h)
+        revert_svnrevs.insert(0, culprit_svnrev)
 
         # Register the revert
         r = subprocess.Popen(["git", "branch", "-f", revert_ref, revert_h]).wait()
@@ -321,33 +348,6 @@ if culprit_svnrev is not None:
 else:
     # FIXME: Seek diversion of upstream
     pass
-
-p = subprocess.Popen(
-    ["git", "branch", "-v"],
-    stdout=subprocess.PIPE,
-    )
-
-revert_svnrevs = []
-master = None
-
-# git-branch is sorted
-for line in p.stdout:
-    r={}
-    if re_match(r'^.\s+reverts/r(\d+)', line, r):
-        svnrev = int(r["m"].group(1))
-        print("reverts/r%d" % svnrev)
-        revert_svnrevs.append(svnrev)
-    elif re_match(r'^.\s+test/master', line, r):
-        # Override upstream_commit for testing
-        upstream_commit = "test/master"
-    elif re_match(r'^.\s+master\s+([0-9a-f]+)', line, r):
-        master = r["m"].group(1)
-
-p.wait()
-
-assert master is not None
-
-revert_svnrevs = list(reversed(sorted(revert_svnrevs)))
 
 for commit in collect_commits("master", upstream_commit):
     svn_commit = commit["commit"]
