@@ -162,7 +162,7 @@ def collect_commits(master, upstream):
             commit={
                 "commit": r["m"].group(1),
                 "comments": "",
-                "files": [],
+                "files": set(),
                 "project": "",
                 "branch": "master",
                 "repository": "",
@@ -188,7 +188,7 @@ def collect_commits(master, upstream):
                 assert line=="\n"
         elif re_match("^\s+(\w[^|]+[^ |])\s+\|", line, r):
             # Seek stat
-            commit["files"].append(r["m"].group(1))
+            commit["files"].add(r["m"].group(1))
         else:
             # Possibly garbage in file status
             pass
@@ -337,8 +337,6 @@ for commit in collect_commits("master", upstream_commit):
         }
     del commit["commit"]
 
-    commit["files"]=json.dumps(commit["files"])
-
     # FIXME: Invalidate ssid with api.
     if invalidated_ssid is not None:
         props["invalidated_ssid"] = invalidated_ssid
@@ -378,7 +376,7 @@ for commit in collect_commits("master", upstream_commit):
         # Make "Revert Revert" from svn_commit.
         # Anyways, I cannot revert reverts/rXXXXXX.
         graduated.append(revert(svn_commit))
-        commit["files"]=json.dumps([]) # FIXME: Would it be partial?
+        commit["files"]=set()
 
         r = subprocess.Popen(["git", "branch", "-D", revert_ref]).wait()
         assert r == 0
@@ -397,7 +395,7 @@ for commit in collect_commits("master", upstream_commit):
         assert local_reverts
         run_cmd(["git", "merge", "--no-ff"] + local_reverts)
         print("\trevert: Applied %s" % str(local_reverts))
-        commit["files"]=json.dumps([])
+        commit["files"]=set()
         # Note: master is unknown here!
 
     # Apply svn HEAD
@@ -413,7 +411,7 @@ for commit in collect_commits("master", upstream_commit):
         if r != 0:
             # Chain revert
             revert_h = revert(svn_commit)
-            commit["files"]=json.dumps([])
+            commit["files"]=set()
             revert_ref = "reverts/r%d" % svnrev
             run_cmd(["git", "branch", "-f", revert_ref, revert_h])
             revert_svnrevs.insert(0, svnrev)
@@ -433,6 +431,7 @@ for commit in collect_commits("master", upstream_commit):
 
     props["commit"] = master
     commit["properties"]=json.dumps(props)
+    commit["files"]=json.dumps(sorted(commit["files"]))
 
     # XXX Hack
     commit["project"] = master
