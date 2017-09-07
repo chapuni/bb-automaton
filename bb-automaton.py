@@ -160,7 +160,6 @@ def collect_commits(master, upstream):
         stdout=subprocess.PIPE,
         )
 
-    commits=[]
     commit=None
     while True:
         line = p.stdout.readline()
@@ -169,7 +168,7 @@ def collect_commits(master, upstream):
             break
         if re_match(r'^([0-9a-f]{40})', line, r):
             if commit is not None:
-                commits.append(commit)
+                yield commit
             commit={
                 "commit": r["m"].group(1),
                 "comments": "",
@@ -205,11 +204,9 @@ def collect_commits(master, upstream):
             pass
 
     if commit is not None:
-        commits.append(commit)
+        yield commit
 
     p.wait()
-
-    return commits
 
 # Check failures
 
@@ -326,8 +323,6 @@ else:
     # FIXME: Seek diversion of upstream
     pass
 
-commits = collect_commits("master", upstream_commit)
-
 p = subprocess.Popen(
     ["git", "branch", "-v"],
     stdout=subprocess.PIPE,
@@ -352,7 +347,7 @@ assert master is not None
 
 revert_svnrevs = list(reversed(sorted(revert_svnrevs)))
 
-for commit in commits:
+for commit in collect_commits("master", upstream_commit):
     h = commit["commit"]
     m = re.match('^r(\d+)', commit["revision"]) # rNNNNNN
     assert m
