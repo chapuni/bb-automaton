@@ -405,8 +405,7 @@ for commit in collect_commits("master", upstream_commit):
     elif not local_reverts:
         print("\tApplying r%d..." % svnrev)
 
-        # FIXME: Add svnrev
-        r = subprocess.Popen(["git", "merge", svn_commit]).wait()
+        r = subprocess.Popen(["git", "merge", "-m", "Merged r%d" % svnrev, svn_commit]).wait()
 
         if r != 0:
             # Chain revert
