@@ -338,14 +338,13 @@ master = None
 
 # git-branch is sorted
 for line in p.stdout:
-    m = re.match(r'^.\s+reverts/r(\d+)', line)
-    if m:
-        svnrev = int(m.group(1))
+    r={}
+    if re_match(r'^.\s+reverts/r(\d+)', line, r):
+        svnrev = int(r["m"].group(1))
         print("reverts/r%d" % svnrev)
         revert_svnrevs.append(svnrev)
-    m = re.match(r'^.\s+master\s+([0-9a-f]+)', line)
-    if m:
-        master = m.group(1)
+    elif re_match(r'^.\s+master\s+([0-9a-f]+)', line, r):
+        master = r["m"].group(1)
 
 p.wait()
 
