@@ -348,7 +348,7 @@ for commit in collect_commits("master", upstream_commit):
         print("\tgrad: Checking %s" % revert_ref)
         subprocess.Popen(["git", "reset", "-q", "--hard", "HEAD"]).wait()
         p = subprocess.Popen(
-            ["git", "merge", "--quiet", "--squash", revert_ref],
+            ["git", "merge", "--squash", revert_ref],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             )
@@ -357,7 +357,14 @@ for commit in collect_commits("master", upstream_commit):
         r = p.wait()
         if r != 0:
             continue
-        r = subprocess.Popen(["git", "diff", "--quiet", "--cached"]).wait()
+        p = subprocess.Popen(
+            ["git", "diff", "--exit-code", "--shortstat", "--cached"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            )
+        p.stdout.readlines() # Discard
+        p.stderr.readlines() # Discard
+        r = p.wait()
         if r != 0:
             continue
         # Merge isn't affected. Assume graduated.
@@ -382,8 +389,14 @@ for commit in collect_commits("master", upstream_commit):
                 continue
             local_reverts.append("reverts/r%d" % revert_svnrev)
         assert local_reverts
-        r = subprocess.Popen(["git", "merge", "--no-ff"] + local_reverts).wait()
-        assert r == 0
+        p = subprocess.Popen(
+            ["git", "merge", "--no-ff"] + local_reverts,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            )
+        o = ''.join(p.stdout.readlines())
+        e = ''.join(p.stderr.readlines())
+        assert p.wait() == 0, "o<%s>\ne<%s>" % (o, e)
         print("\tApplied %s" % str(local_reverts))
         commit["files"]=json.dumps([])
         # Note: master is unknown here!
@@ -391,9 +404,14 @@ for commit in collect_commits("master", upstream_commit):
     # Apply svn HEAD
     if graduated:
         print("\tApplying graduated commit")
-        r = subprocess.Popen(["git", "merge", "--no-ff", graduated]).wait()
-        print("r=%d" % r)
-        assert r == 0
+        p = subprocess.Popen(
+            ["git", "merge", "--no-ff"] + graduated,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            )
+        o = ''.join(p.stdout.readlines())
+        e = ''.join(p.stderr.readlines())
+        assert p.wait() == 0, "o<%s>\ne<%s>" % (o, e)
     elif not local_reverts:
         print("\tApplying r%d..." % svnrev)
         r = subprocess.Popen(["git", "merge", svn_commit]).wait()
@@ -408,7 +426,14 @@ for commit in collect_commits("master", upstream_commit):
             revert_svnrevs.insert(0, svnrev)
             r = subprocess.Popen(["git", "reset", "-q", "--hard", master]).wait()
             assert r == 0
-            r = subprocess.Popen(["git", "merge", revert_ref]).wait()
+            p = subprocess.Popen(
+                ["git", "merge", revert_ref],
+                    stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                )
+            o = ''.join(p.stdout.readlines())
+            e = ''.join(p.stderr.readlines())
+            assert p.wait() == 0, "o<%s>\ne<%s>" % (o, e)
             print("\tApplied new %s" % revert_ref)
 
     p = subprocess.Popen(
