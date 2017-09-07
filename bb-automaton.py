@@ -116,18 +116,25 @@ def run_cmd(args):
     assert p.wait() == 0, "o<%s>\ne<%s>" % (o, e)
 
 # Create revert object.
-def revert(h):
+def revert(h, msg=None):
     r = subprocess.Popen(["git", "reset", "-q", '--hard', h]).wait()
     assert r == 0
 
+    if msg:
+        run_cmd(["git", "revert", "--no-commit", h])
+        cmdline = ["git", "commit", "-m", msg]
+    else:
+        cmdline = ["git", "revert", "--no-edit", h]
+
     p = subprocess.Popen(
-        ["git", "revert", "--no-edit", h],
+        cmdline,
         stdout=subprocess.PIPE,
         )
     line = ''.join(p.stdout.readlines())
     m = re.match(r'\[detached HEAD\s+([0-9a-f]+)\]', line)
     assert m, "git-revert ====\n%s====" % line
     p.wait()
+
     return m.group(1)
 
 # Collect commits from git-svn
