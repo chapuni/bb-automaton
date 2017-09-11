@@ -153,6 +153,9 @@ class RevertController:
     def __next__(self):
         return self._svnrevs.__next__()
 
+    def __getitem__(self, i):
+        return self._svnrevs[i]
+
     def __contains__(self, a):
         return a in self._svnrevs
 
