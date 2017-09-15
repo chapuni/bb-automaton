@@ -267,7 +267,7 @@ revert_svnrevs = list(reversed(sorted(revert_svnrevs)))
 invalidated_ssid = None
 if culprit_svnrev is not None:
     p = subprocess.Popen(
-        ["git", "merge-base", first_ss["project"], "origin/master"],
+        ["git", "merge-base", first_ss["project"], upstream_commit],
         stdout=subprocess.PIPE,
         )
     m = re.match(r'^([0-9a-f]{40})', p.stdout.readline())
