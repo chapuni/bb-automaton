@@ -409,6 +409,7 @@ if culprit_svnrev is not None:
         resp = urlopen(api_url+'sourcestamps?limit=1&order=-ssid')
         sourcestamps = json.load(resp)
         resp.close()
+        # FIXME: Assumes ssid equal chid.
         invalidated_ssid = "%d..%d" % (first_ss["ssid"], sourcestamps["sourcestamps"][0]["ssid"])
 
         # Rewind master to one commit before the revertion.
@@ -436,7 +437,7 @@ for commit in collect_commits("master", upstream_commit):
 
     # FIXME: Invalidate ssid with api.
     if invalidated_ssid is not None:
-        props["invalidated_ssid"] = invalidated_ssid
+        props["invalidated_changes"] = invalidated_ssid
 
     print("========Processing r%d" % svnrev)
 
