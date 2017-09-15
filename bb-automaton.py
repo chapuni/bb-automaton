@@ -9,7 +9,7 @@ from urllib import *
 
 bb_url = 'http://localhost:8010/'
 if len(sys.argv) >= 2:
-    bb_url = argv[1]
+    bb_url = sys.argv[1]
 
 git_dir = '/home/chapuni/bb-automaton/llvm-project'
 
@@ -187,6 +187,8 @@ class RevertController:
         return changes
 
     def register(self, svnrev):
+        if svnrev in self._svnrevs:
+            self._svnrevs.remove(svnrev)
         self._svnrevs.append(svnrev)
         # FIXME: Do smarter!
         self._svnrevs = list(reversed(sorted(self._svnrevs)))
