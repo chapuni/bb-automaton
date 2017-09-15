@@ -307,6 +307,7 @@ resp.close()
 recentbuilds = get_recentbuilds(limit=64)
 
 culprit_svnrev = None
+culprit_svnrevs = {}
 first_ss = None
 
 for builder in builders["builders"]:
@@ -344,6 +345,9 @@ for builder in builders["builders"]:
         m_svnrev = re.match(r'^r(\d+)$', ss["revision"])
         if m_svnrev:
             svnrev = int(m_svnrev.group(1))
+            if svnrev in culprit_svnrevs:
+                continue
+            culprit_svnrevs[svnrev] = ss
             if culprit_svnrev is None or culprit_svnrev > svnrev:
                 culprit_svnrev = svnrev
                 first_ss = ss
@@ -416,11 +420,18 @@ if culprit_svnrev is not None:
         master = "%s^" % first_ss["project"]
         run_cmd(["git", "branch", "-f", "master", master])
 
-        revert_h = reverts.revert(svn_commit, culprit_svnrev)
-
-        # Register the revert
-        run_cmd(["git", "branch", "-f", revert_ref, revert_h])
-        print("Reverted %s (invalidate %s)" % (revert_ref, invalidated_ssid))
+        for svnrev in sorted(culprit_svnrevs.keys()):
+            ss = culprit_svnrevs[svnrev]
+            head = ss["project"]
+            p = subprocess.Popen(
+                ["git", "merge-base", head, upstream_commit],
+                stdout=subprocess.PIPE,
+                )
+            m = re.match(r'^([0-9a-f]{40})', p.stdout.readline())
+            assert m
+            svn_commit = m.group(1)
+            p.wait()
+            revert_h = reverts.revert(svn_commit, svnrev, head)
 else:
     # FIXME: Seek diversion of upstream
     pass
@@ -445,6 +456,8 @@ for commit in collect_commits("master", upstream_commit):
     # FIXME: Skip if change is nothing to do.
     graduated = []
     for revert_svnrev in list(reverts):
+        if revert_svnrev > svnrev:
+            continue
         revert_ref = reverts.refspec(revert_svnrev)
 
         # Don't check if each revert doesn't touch the commit.
