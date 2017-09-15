@@ -122,6 +122,17 @@ def run_cmd(args):
 def git_reset(head="HEAD"):
     run_cmd(["git", "reset", "-q", '--hard', head])
 
+# Oneliner expects success.
+def git_head():
+    p = subprocess.Popen(
+        ["git", "rev-parse", "HEAD"],
+        stdout=subprocess.PIPE,
+        )
+    m = re.match(r'^([0-9a-f]{40})', p.stdout.readline())
+    assert m
+    p.wait()
+    return m.group(1)
+
 # Create revert object.
 def revert(h, msg=None):
     git_reset(h)
@@ -506,15 +517,9 @@ for commit in collect_commits("master", upstream_commit):
             # FIXME: Add message
             run_cmd(["git", "merge", revert_ref])
             print("\tApplied new %s" % revert_ref)
+            master = git_head()
 
-    p = subprocess.Popen(
-        ["git", "rev-parse", "HEAD"],
-        stdout=subprocess.PIPE,
-        )
-    m = re.match(r'^([0-9a-f]{40})', p.stdout.readline())
-    assert m
-    master = m.group(1)
-    p.wait()
+    master = git_head()
 
     props["commit"] = master
     commit["properties"]=json.dumps(props)
