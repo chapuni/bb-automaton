@@ -119,10 +119,12 @@ def run_cmd(args):
     e = ''.join(p.stderr.readlines())
     assert p.wait() == 0, "o<%s>\ne<%s>" % (o, e)
 
+def git_reset(head="HEAD"):
+    run_cmd(["git", "reset", "-q", '--hard', head])
+
 # Create revert object.
 def revert(h, msg=None):
-    r = subprocess.Popen(["git", "reset", "-q", '--hard', h]).wait()
-    assert r == 0
+    git_reset(h)
 
     if msg:
         run_cmd(["git", "revert", "--no-commit", h])
@@ -439,7 +441,7 @@ for commit in collect_commits("master", upstream_commit):
             continue
 
         print("\tgrad: Checking %s" % revert_ref)
-        run_cmd(["git", "reset", "-q", "--hard", svn_commit])
+        git_reset(svn_commit)
         p = subprocess.Popen(
             ["git", "merge", "--squash", revert_ref],
             stdout=subprocess.PIPE,
@@ -470,7 +472,7 @@ for commit in collect_commits("master", upstream_commit):
 
         reverts.remove(revert_svnrev)
 
-    run_cmd(["git", "reset", "-q", "--hard", master])
+    git_reset(master)
 
     # Apply reverts
     local_reverts = []
@@ -500,7 +502,7 @@ for commit in collect_commits("master", upstream_commit):
             revert_h = reverts.revert(svn_commit, svnrev)
             commit["files"]=set()
             revert_ref = reverts.refspec(svnrev)
-            run_cmd(["git", "reset", "-q", "--hard", master])
+            git_reset(master)
             # FIXME: Add message
             run_cmd(["git", "merge", revert_ref])
             print("\tApplied new %s" % revert_ref)
