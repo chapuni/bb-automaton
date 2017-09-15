@@ -133,6 +133,54 @@ def git_head():
     p.wait()
     return m.group(1)
 
+def do_merge(commits, msg=None, ff=False, commit=True):
+    cmdline = ["git", "merge"]
+    cmdline_no_commit = []
+    if not commit:
+        cmdline_no_commit = ["--no-commit"]
+    if not ff:
+        cmdline.append("--no-ff")
+    if msg:
+        cmdline += ["-m", msg]
+
+    p = subprocess.Popen(
+        cmdline + cmdline_no_commit + commits,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        )
+    p.stdout.readlines() # Discard stdout
+    p.stderr.readlines() # Discard stdout
+    if p.wait() == 0:
+        return True
+
+    return False
+    print("\tdo_merge: Attempting individual: %s" % str(commits))
+
+
+    # Attempt individual merge.
+    git_reset()
+    orig_h = git_head()
+
+    merged = True
+    for h in commits:
+        r = subprocess.Popen(
+            cmdline + [h],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            ).wait()
+        p.stdout.readlines() # Discard stdout
+        p.stderr.readlines() # Discard stdout
+        if r != 0:
+            merged = False
+            break
+
+    if merged and commit:
+        git_reset()
+    else:
+        git_reset(orig_h)
+
+    return merged
+
 # Create revert object.
 def revert(h, msg=None):
     git_reset(h)
@@ -212,16 +260,27 @@ class RevertController:
         assert r == 0
 
     # This moves HEAD
-    def revert(self, h, svnrev):
-        revert_h = revert(h, "Revert r%d" % svnrev)
-        self._svnrevs.insert(0, svnrev)
-        assert len(self._svnrevs) == 1 or self._svnrevs[0] > self._svnrevs[1]
+    def revert(self, svn_commit, svnrev, master):
+        revert_h = revert(svn_commit, "Revert r%d" % svnrev)
+        self._svnrevs.append(svnrev)
+        self._svnrevs.sort(key=lambda x: -x)
+        assert len(self._svnrevs) == 1 or self._svnrevs[0] > self._svnrevs[1], "<%s>" % str(self._svnrevs)
 
         revert_ref = "reverts/r%d" % svnrev
-        run_cmd(["git", "branch", "-f", revert_ref, revert_h])
         print("\t*** Revert %s" % revert_ref)
 
-        # Make recommit
+        # At last, make reverts branch.
+        run_cmd(["git", "branch", "-f", revert_ref, revert_h])
+
+        return revert_h
+
+    # Make recommit with HEAD.
+    # It requires master is already reverted.
+    def make_recommit(self, svn_commit, svnrev, master):
+        # Make recommit on revert.
+        # FIXME: Update commit log with svnrev
+        git_reset(self.refspec(svnrev))
+        run_cmd(["git", "cherry-pick", "--no-commit", svn_commit])
         p = subprocess.Popen(
             ["git", "commit", "-m", "Recommit r%d" % svnrev],
             stdout=subprocess.PIPE,
@@ -231,11 +290,44 @@ class RevertController:
         assert m, "git-recommit ====\n%s====" % line
         p.wait()
         recommit_h = m.group(1)
-
         recommit_ref = "recommits/r%d" % svnrev
-        r = subprocess.Popen(["git", "branch", "-f", recommit_ref, recommit_h]).wait()
 
-        return revert_h
+        # Make sure if it can be applied to the master
+        git_reset(master)
+        # FIXME: Try a simple case at first!
+        recommit_cand = []
+        for rev in reversed(self._svnrevs):
+            if rev >= svnrev:
+                break
+            recommit_cand.append("recommits/r%d" % rev)
+        print("\tRecommit r%d: candidates %s" % (svnrev,str(recommit_cand)))
+
+        i = 0
+        while recommit_cand and i < len(recommit_cand):
+            target_rev = recommit_cand[i]
+            cand = recommit_cand[:]
+            cand.pop(i)
+            git_reset(master)
+            r = do_merge(cand + [recommit_h], commit=False)
+            if r:
+                print("\tRecommit r%d: <%s>: Removing should be safe." % (svnrev, target_rev))
+                recommit_cand.pop(i)
+            else:
+                # Failed. Try next.
+                print("\tRecommit r%d: <%s>: It was essential. " % (svnrev, target_rev))
+                i += 1
+
+        # Create the actual recommit on the revert.
+        git_reset(self.refspec(svnrev))
+        msg = "Merge recommits/r%d" % svnrev
+        if recommit_cand:
+            msg += " with " + ", ".join(recommit_cand)
+        recommit_cand.append(recommit_h)
+        print("\tRecommit r%d: %s" % (svnrev, msg))
+        r = do_merge(recommit_cand, msg=msg, ff=True)
+        assert r
+
+        r = subprocess.Popen(["git", "branch", "-f", recommit_ref, git_head()]).wait()
 
 # Collect commits from git-svn
 def collect_commits(master, upstream):
@@ -508,10 +600,26 @@ for commit in collect_commits("master", upstream_commit):
                 continue
             local_reverts.append(reverts.refspec(revert_svnrev))
         assert local_reverts
-        run_cmd(["git", "merge", "--no-ff"] + local_reverts)
-        print("\trevert: Applied %s" % str(local_reverts))
-        commit["files"]=set()
-        # Note: master is unknown here!
+        p = subprocess.Popen(
+            ["git", "merge", "--no-ff"] + local_reverts,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            )
+        master = git_head()
+        p.stdout.readlines() # Discard
+        p.stderr.readlines() # Discard
+        if p.wait() == 0:
+            print("\trevert: Applied %s" % str(local_reverts))
+            commit["files"]=set()
+            master = git_head()
+
+            # Make recommits
+            reverts.make_recommit(svn_commit, svnrev, master)
+            git_reset(master)
+        else:
+            print("\trevert: Local reverts failed. %s" % str(local_reverts))
+            run_cmd(["git", "reset", "-q", "--hard", master])
+            reverts.remove(svnrev)
 
     # Apply svn HEAD
     if graduated:
@@ -524,7 +632,7 @@ for commit in collect_commits("master", upstream_commit):
 
         if r != 0:
             # Chain revert
-            revert_h = reverts.revert(svn_commit, svnrev)
+            revert_h = reverts.revert(svn_commit, svnrev, master)
             commit["files"]=set()
             revert_ref = reverts.refspec(svnrev)
             git_reset(master)
@@ -532,6 +640,10 @@ for commit in collect_commits("master", upstream_commit):
             run_cmd(["git", "merge", revert_ref])
             print("\tApplied new %s" % revert_ref)
             master = git_head()
+
+            # Make recommits
+            reverts.make_recommit(svn_commit, svnrev, master)
+            git_reset(master)
 
     master = git_head()
 
