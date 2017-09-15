@@ -223,7 +223,7 @@ class RevertController:
 
         # Make recommit
         p = subprocess.Popen(
-            ["git", "cherry-pick", h],
+            ["git", "commit", "-m", "Recommit r%d" % svnrev],
             stdout=subprocess.PIPE,
             )
         line = ''.join(p.stdout.readlines())
