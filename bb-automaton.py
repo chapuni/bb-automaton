@@ -22,6 +22,20 @@ def re_match(expr, line, r):
     r["m"] = m
     return m
 
+# Post the commit
+def post_commit(commit):
+    if False:
+        print("Dry run -- r%d" % svnrev)
+        return False
+
+    resp=urlopen(change_url, urlencode(commit))
+    for line in resp:
+        print(line.rstrip())
+    st=resp.getcode()
+    assert st == 200, "status=%d" % st
+    resp.close()
+    return True
+
 def get_recentbuilds(builderid=None, limit=24):
     q = {
         "order": "-buildid",
@@ -655,17 +669,7 @@ for commit in collect_commits("master", upstream_commit):
     commit["project"] = master
 
     # Post the commit
-    if True:
-        resp=urlopen(change_url, urlencode(commit))
-        for line in resp:
-            print(line.rstrip())
-        st=resp.getcode()
-        if st != 200:
-            print("status=%d" % resp.getcode())
-            break
-        resp.close()
+    if post_commit(commit):
         run_cmd(["git", "branch", "-f", "master", master])
-    else:
-        print("Dry run -- r%d" % svnrev)
 
 #EOF
