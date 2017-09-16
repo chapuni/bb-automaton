@@ -179,6 +179,24 @@ def do_merge(commits, msg=None, ff=False, commit=True):
 
     return False
 
+def attempt_merge(commit, cands):
+    i = 0
+    while cands and i < len(cands):
+        target_rev = cands[i]
+        cand = cands[:]
+        cand.pop(i)
+        git_reset(master)
+        r = do_merge(cand + [commit], commit=False)
+        if r:
+            print("\tRecommit: <%s>: Removing should be safe." % target_rev)
+            cands.pop(i)
+        else:
+            # Failed. Try next.
+            print("\tRecommit: <%s>: It was essential. " % target_rev)
+            i += 1
+
+    return cands
+
 # Create revert object.
 def revert(h, msg=None):
     git_reset(h)
@@ -302,20 +320,7 @@ class RevertController:
         recommit_cand = list(self.gen_recommits())
         print("\tRecommit r%d: candidates %s" % (svnrev,str(recommit_cand)))
 
-        i = 0
-        while recommit_cand and i < len(recommit_cand):
-            target_rev = recommit_cand[i]
-            cand = recommit_cand[:]
-            cand.pop(i)
-            git_reset(master)
-            r = do_merge(cand + [recommit_h], commit=False)
-            if r:
-                print("\tRecommit r%d: <%s>: Removing should be safe." % (svnrev, target_rev))
-                recommit_cand.pop(i)
-            else:
-                # Failed. Try next.
-                print("\tRecommit r%d: <%s>: It was essential. " % (svnrev, target_rev))
-                i += 1
+        recommit_cand = attempt_merge(recommit_h, recommit_cand)
 
         # Create the actual recommit on the revert.
         git_reset(self.refspec(svnrev))
