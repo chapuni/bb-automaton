@@ -272,6 +272,12 @@ class RevertController:
 
         return revert_h
 
+    def gen_recommits(self, svnrev=None):
+        for rev in reversed(self._svnrevs):
+            if svnrev is not None and rev >= svnrev:
+                break
+            yield "recommits/r%d" % rev
+
     # Make recommit with HEAD.
     # It requires master is already reverted.
     def make_recommit(self, svn_commit, svnrev, master):
@@ -293,11 +299,7 @@ class RevertController:
         # Make sure if it can be applied to the master
         git_reset(master)
         # FIXME: Try a simple case at first!
-        recommit_cand = []
-        for rev in reversed(self._svnrevs):
-            if rev >= svnrev:
-                break
-            recommit_cand.append("recommits/r%d" % rev)
+        recommit_cand = list(self.gen_recommits())
         print("\tRecommit r%d: candidates %s" % (svnrev,str(recommit_cand)))
 
         i = 0
