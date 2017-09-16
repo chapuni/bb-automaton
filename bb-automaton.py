@@ -317,66 +317,105 @@ class RevertController:
 
         r = subprocess.Popen(["git", "branch", "-f", recommit_ref, git_head()]).wait()
 
-# Collect commits from git-svn
-def collect_commits(master, upstream):
-    p = subprocess.Popen(
-        [
-            "git", "log",
-            "--reverse",
-            "--format=%H%n%B%aN:%aE:%at\n%N",
-            "--stat=1024,1000",
-            master+".."+upstream,
-        ],
-        stdout=subprocess.PIPE,
-        )
+# git log --format=raw --show-notes
+def collect_commits(fh):
+    commit = None
+    r = {}
 
-    commit=None
+    line = fh.readline()
+    state = "commit"
     while True:
-        line = p.stdout.readline()
-        r={}
-        if line=="":
-            break
-        if re_match(r'^([0-9a-f]{40})', line, r):
+        if line=="" or line.startswith("commit "):
             if commit is not None:
                 yield commit
-            commit={
-                "commit": r["m"].group(1),
+                commit = None
+            if line=="":
+                return
+
+        if state=="commit":
+            m = re.match(r'^commit\s+([0-9a-f]{40})', line)
+            assert m, line
+            commit = {
+                "commit": m.group(1),
                 "comments": "",
+                "revision": "",
+                "revlink": "",
                 "files": set(),
                 "project": "",
                 "branch": "master",
                 "repository": "",
                 "category": "",
                 "codebase": "",
+                "properties": {},
                 }
-            # Body, ends with authors
-            while True:
-                line=p.stdout.readline()
-                assert line != ""
-                if re_match(r'^([^:]+):([^:]+):(\d+)$', line.rstrip(), r):
-                    break
-                commit["comments"] += line
-            m=r["m"]
-            commit["author"] = "%s <%s>" % (m.group(1), m.group(2))
-            commit["when"] = int(m.group(3))
-
-            line=p.stdout.readline()
-            if re_match(r'^git-svn-rev:\s*(\d+)', line, r):
+            line = fh.readline()
+            state="author"
+            continue
+        elif state=="author":
+            # Discard tree and parent
+            if re.match(r'^(tree|parent)\s+', line):
+                line = fh.readline()
+                continue
+            m = re.match(r'^author\s+(.+\s+<[^>]*>)\s+(\d+)', line)
+            assert m, line
+            commit["author"] = m.group(1)
+            commit["when"] = m.group(2)
+            state = "committer"
+            line = fh.readline()
+            continue
+        elif state=="committer":
+            # Discard committer
+            if line.startswith("committer "):
+                line = fh.readline()
+                continue
+            assert line == "\n", "<%s>" % line
+            state = "comments"
+            line = fh.readline()
+            continue
+        elif state=="comments":
+            while re_match(r'^    (.*)$', line, r):
+                commit["comments"] += r["m"].group(1) + "\n"
+                line = fh.readline()
+                continue
+            assert line=="\n", "%d<%s>" % (len(line), line)
+            line = fh.readline()
+            state="notes"
+            continue
+        elif state=="notes":
+            if not line.startswith("Notes:"):
+                state="stat"
+                continue
+            line = fh.readline()
+            if re_match(r'^    git-svn-rev:\s*(\d+)', line, r):
                 commit["revision"]="r"+r["m"].group(1)
                 commit["revlink"]="https://reviews.llvm.org/rL"+r["m"].group(1)
-            else:
-                assert line=="\n"
-        elif re_match("^\s+(\w[^|]+[^ |])\s+\|", line, r):
-            # Seek stat
-            commit["files"].add(r["m"].group(1))
-        else:
-            # Possibly garbage in file status
-            pass
-
-    if commit is not None:
-        yield commit
-
-    p.wait()
+                line = fh.readline()
+            while line.startswith("    "):
+                # Discard notes
+                line = fh.readline()
+                continue
+            if line=="":
+                continue
+            assert line == "\n", "<%s>" % line
+            line = fh.readline()
+            state="stat"
+            continue
+        elif state=="stat":
+            if re_match("^\s+(\w[^|]+[^ |])\s+\|", line, r):
+                while re_match("^\s+(\w[^|]+[^ |])\s+\|", line, r):
+                    commit["files"].add(r["m"].group(1))
+                    line = fh.readline()
+                    continue
+                # Discard one line.
+                # NN files changed, NN insertions(+), NN deletions(-)
+                line = fh.readline()
+            if line=="":
+                continue
+            assert line == "\n", "<%s>" % line
+            line = fh.readline()
+            state="commit"
+            continue
+        assert False, "<%s>" % line
 
 # Check failures
 
@@ -516,7 +555,19 @@ else:
     # FIXME: Seek diversion of upstream
     pass
 
-for commit in collect_commits("master", upstream_commit):
+# Collect commits from git-svn
+p = subprocess.Popen(
+    [
+        "git", "log",
+        "--reverse",
+        "--format=raw", "--show-notes",
+        "--stat=1024,1000",
+        "master..%s" % upstream_commit,
+        ],
+    stdout=subprocess.PIPE,
+    )
+
+for commit in collect_commits(p.stdout):
     svn_commit = commit["commit"]
     m = re.match('^r(\d+)', commit["revision"]) # rNNNNNN
     assert m
@@ -645,5 +696,7 @@ for commit in collect_commits("master", upstream_commit):
     # Post the commit
     if post_commit(commit):
         run_cmd(["git", "branch", "-f", "master", master])
+
+p.wait()
 
 #EOF
