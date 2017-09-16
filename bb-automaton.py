@@ -168,32 +168,6 @@ def do_merge(commits, msg=None, ff=False, commit=True):
         return True
 
     return False
-    print("\tdo_merge: Attempting individual: %s" % str(commits))
-
-
-    # Attempt individual merge.
-    git_reset()
-    orig_h = git_head()
-
-    merged = True
-    for h in commits:
-        r = subprocess.Popen(
-            cmdline + [h],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            ).wait()
-        p.stdout.readlines() # Discard stdout
-        p.stderr.readlines() # Discard stdout
-        if r != 0:
-            merged = False
-            break
-
-    if merged and commit:
-        git_reset()
-    else:
-        git_reset(orig_h)
-
-    return merged
 
 # Create revert object.
 def revert(h, msg=None):
