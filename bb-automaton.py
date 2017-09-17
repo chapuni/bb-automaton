@@ -123,7 +123,10 @@ def get_culprit_ss(builder):
     return culprit_ss
 
 # Oneliner expects success.
-def run_cmd(args):
+def eval_cmd(args, stdout=False, stderr=False, report=False):
+    if isinstance(args, str):
+        args = args.split()
+
     p = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
@@ -131,7 +134,21 @@ def run_cmd(args):
         )
     o = ''.join(p.stdout.readlines())
     e = ''.join(p.stderr.readlines())
-    assert p.wait() == 0, "o<%s>\ne<%s>" % (o, e)
+    if p.wait() == 0:
+        if stdout:
+            sys.stdout.write(o)
+        if stdout or stderr:
+            sys.stderr.write(e)
+        return True
+    else:
+        if report:
+            sys.stdout.write(o)
+            sys.stderr.write(e)
+        return False
+
+# Oneliner expects success.
+def run_cmd(args, **kwargs):
+    assert eval_cmd(args, report=True, **kwargs)
 
 def git_reset(head="HEAD"):
     run_cmd(["git", "reset", "-q", '--hard', head])
@@ -167,17 +184,7 @@ def do_merge(commits, msg=None, ff=False, commit=True):
     if msg:
         cmdline += ["-m", msg]
 
-    p = subprocess.Popen(
-        cmdline + cmdline_no_commit + commits,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        )
-    p.stdout.readlines() # Discard stdout
-    p.stderr.readlines() # Discard stdout
-    if p.wait() == 0:
-        return True
-
-    return False
+    return eval_cmd(cmdline + cmdline_no_commit + commits)
 
 def attempt_merge(commit, cands):
     i = 0
@@ -276,8 +283,7 @@ class RevertController:
 
     def remove(self, svnrev):
         self._svnrevs.remove(svnrev)
-        r = subprocess.Popen(["git", "branch", "-D", self.refspec(svnrev)]).wait()
-        assert r == 0
+        run_cmd(["git", "branch", "-D", self.refspec(svnrev), self.refspec_m(svnrev)], stdout=True)
 
     # This moves HEAD
     def revert(self, svn_commit, svnrev, master):
@@ -336,7 +342,7 @@ class RevertController:
         r = do_merge(recommit_cand, msg=msg, ff=True)
         assert r
 
-        r = subprocess.Popen(["git", "branch", "-f", recommit_ref, git_head()]).wait()
+        run_cmd(["git", "branch", "-f", recommit_ref, git_head()], stdout=True)
 
 # git log --format=raw --show-notes
 def collect_commits(fh):
@@ -530,14 +536,7 @@ if culprit_svnrev is not None:
     revert_ref = reverts.refspec(culprit_svnrev)
 
     # Confirm if the revert exists.
-    p = subprocess.Popen(
-        ["git", "rev-parse", "--verify", "-q", revert_ref],
-        stdout=subprocess.PIPE,
-        )
-    p.stdout.readlines() # Discard stdout
-    r = p.wait()
-
-    if r == 0:
+    if eval_cmd(["git", "rev-parse", "--verify", "-q", revert_ref]):
         print("%s exists. Do nothing." % revert_ref)
     else:
         # Calculate range(ssid) to invalidate previous builds
@@ -606,25 +605,9 @@ for commit in collect_commits(p.stdout):
 
         print("\tgrad: Checking %s" % revert_ref)
         git_reset(svn_commit)
-        p = subprocess.Popen(
-            ["git", "merge", "--squash", revert_ref],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            )
-        p.stdout.readlines() # Discard
-        p.stderr.readlines() # Discard
-        r = p.wait()
-        if r != 0:
+        if not eval_cmd(["git", "merge", "--squash", revert_ref]):
             continue
-        p = subprocess.Popen(
-            ["git", "diff", "--exit-code", "--shortstat", "--cached"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            )
-        p.stdout.readlines() # Discard
-        p.stderr.readlines() # Discard
-        r = p.wait()
-        if r != 0:
+        if not eval_cmd("git diff --quiet --cached"):
             continue
         # Merge isn't affected. Assume graduated.
         print("\tgrad: %s is graduated." % revert_ref)
@@ -647,15 +630,7 @@ for commit in collect_commits(p.stdout):
                 continue
             local_reverts.append(reverts.refspec(revert_svnrev))
         assert local_reverts
-        p = subprocess.Popen(
-            ["git", "merge", "--no-ff"] + local_reverts,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            )
-        master = git_head()
-        p.stdout.readlines() # Discard
-        p.stderr.readlines() # Discard
-        if p.wait() == 0:
+        if eval_cmd(["git", "merge", "--no-ff"] + local_reverts):
             print("\trevert: Applied %s" % str(local_reverts))
             commit["files"]=set()
             master = git_head()
@@ -665,7 +640,7 @@ for commit in collect_commits(p.stdout):
             git_reset(master)
         else:
             print("\trevert: Local reverts failed. %s" % str(local_reverts))
-            run_cmd(["git", "reset", "-q", "--hard", master])
+            git_reset(master)
             reverts.remove(svnrev)
 
     # Apply svn HEAD
@@ -675,9 +650,7 @@ for commit in collect_commits(p.stdout):
     elif not local_reverts:
         print("\tApplying r%d..." % svnrev)
 
-        r = subprocess.Popen(["git", "merge", "-m", "Merged r%d" % svnrev, svn_commit]).wait()
-
-        if r != 0:
+        if not eval_cmd(["git", "merge", "-m", "Merged r%d" % svnrev, svn_commit], stdout=True):
             # Chain revert
             revert_h = reverts.revert(svn_commit, svnrev, master)
             commit["files"]=set()
