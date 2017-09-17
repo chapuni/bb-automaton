@@ -244,6 +244,10 @@ class RevertController:
     def refspec(svnrev):
         return "reverts/r%d" % svnrev
 
+    @staticmethod
+    def refspec_m(svnrev):
+        return "recommits/r%d" % svnrev
+
     def changes(self, svnrev):
         assert svnrev in self._svnrevs
         if svnrev in self._changes:
@@ -282,7 +286,7 @@ class RevertController:
         self._svnrevs.sort(key=lambda x: -x)
         assert len(self._svnrevs) == 1 or self._svnrevs[0] > self._svnrevs[1], "<%s>" % str(self._svnrevs)
 
-        revert_ref = "reverts/r%d" % svnrev
+        revert_ref = self.refspec(svnrev)
         print("\t*** Revert %s" % revert_ref)
 
         # At last, make reverts branch.
@@ -294,7 +298,7 @@ class RevertController:
         for rev in reversed(self._svnrevs):
             if svnrev is not None and rev >= svnrev:
                 break
-            yield "recommits/r%d" % rev
+            yield self.refspec_m(rev)
 
     # Make recommit with HEAD.
     # It requires master is already reverted.
@@ -312,7 +316,7 @@ class RevertController:
         assert m, "git-recommit ====\n%s====" % line
         p.wait()
         recommit_h = m.group(1)
-        recommit_ref = "recommits/r%d" % svnrev
+        recommit_ref = self.refspec_m(svnrev)
 
         # Make sure if it can be applied to the master
         git_reset(master)
@@ -324,7 +328,7 @@ class RevertController:
 
         # Create the actual recommit on the revert.
         git_reset(self.refspec(svnrev))
-        msg = "Merge recommits/r%d" % svnrev
+        msg = "Merge %s" % recommit_ref
         if recommit_cand:
             msg += " with " + ", ".join(recommit_cand)
         recommit_cand.append(recommit_h)
@@ -565,6 +569,7 @@ p = subprocess.Popen(
         "--reverse",
         "--format=raw", "--show-notes",
         "--stat=1024,1000",
+
         "master..%s" % upstream_commit,
         ],
     stdout=subprocess.PIPE,
