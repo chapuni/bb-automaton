@@ -217,27 +217,6 @@ def attempt_merge(commit, cands):
 
     return cands
 
-# Create revert object.
-def revert(h, msg=None):
-    git_reset(h)
-
-    if msg:
-        run_cmd(["git", "revert", "--no-commit", h])
-        cmdline = ["git", "commit", "-m", msg]
-    else:
-        cmdline = ["git", "revert", "--no-edit", h]
-
-    p = subprocess.Popen(
-        cmdline,
-        stdout=subprocess.PIPE,
-        )
-    line = ''.join(p.stdout.readlines())
-    m = re.match(r'\[detached HEAD\s+([0-9a-f]+)\]', line)
-    assert m, "git-revert ====\n%s====" % line
-    p.wait()
-
-    return m.group(1)
-
 # Revert controller
 class RevertController:
     def __init__(self):
@@ -289,8 +268,27 @@ class RevertController:
         run_cmd(["git", "branch", "-D", self.refspec(svnrev), self.refspec_m(svnrev)], stdout=True)
 
     # This moves HEAD
-    def revert(self, svn_commit, svnrev, master):
-        revert_h = revert(svn_commit, "Revert r%d" % svnrev)
+    def revert(self, svn_commit, svnrev, master, msg=None):
+        git_reset(svn_commit)
+
+        if msg:
+            run_cmd(["git", "revert", "--no-commit", svn_commit])
+            cmdline = ["git", "commit", "-m", msg]
+        else:
+            cmdline = ["git", "revert", "--no-edit", svn_commit]
+
+        p = subprocess.Popen(
+            cmdline,
+            stdout=subprocess.PIPE,
+            )
+
+        line = ''.join(p.stdout.readlines())
+        m = re.match(r'\[detached HEAD\s+([0-9a-f]+)\]', line)
+        assert m, "git-revert ====\n%s====" % line
+        p.wait()
+
+        revert_h = m.group(1)
+
         self._svnrevs.append(svnrev)
         self._svnrevs.sort(key=lambda x: -x)
         assert len(self._svnrevs) == 1 or self._svnrevs[0] > self._svnrevs[1], "<%s>" % str(self._svnrevs)
@@ -330,7 +328,7 @@ class RevertController:
         # Make sure if it can be applied to the master
         git_reset(master)
         # FIXME: Try a simple case at first!
-        recommit_cand = list(self.gen_recommits())
+        recommit_cand = list(self.gen_recommits(svnrev))
         print("\tRecommit r%d: candidates %s" % (svnrev,str(recommit_cand)))
 
         recommit_cand = attempt_merge(recommit_h, recommit_cand)
@@ -633,10 +631,10 @@ for commit in collect_commits(p.stdout):
         # Merge isn't affected. Assume graduated.
         print("\tgrad: %s is graduated." % revert_ref)
 
-        # Make "Revert Revert" from svn_commit.
-        # Anyways, I cannot revert reverts/rXXXXXX.
-        graduated.append(revert(svn_commit))
-        commit["files"]=set()
+        # Make grad commit.
+        r = do_merge([revert_ref])
+        assert r
+        graduated.append(git_head())
 
         reverts.remove(revert_svnrev)
 
