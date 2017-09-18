@@ -174,6 +174,20 @@ def git_merge_base(*args):
     p.wait()
     return m.group(1)
 
+# Get file list between commits.
+def git_diff_files(commit, commit2="HEAD"):
+    p = subprocess.Popen(
+        ["git", "diff", "--name-only", commit, commit2],
+        stdout=subprocess.PIPE,
+        )
+
+    changes = set()
+    for line in p.stdout:
+        changes.add(line.rstrip())
+    assert p.wait() == 0
+
+    return changes
+
 def do_merge(commits, msg=None, ff=False, commit=True):
     cmdline = ["git", "merge"]
     if not commit:
@@ -260,17 +274,7 @@ class RevertController:
             return self._changes[svnrev]
 
         refspec = self.refspec(svnrev)
-
-        p = subprocess.Popen(
-            ["git", "diff", "--name-only", refspec, "%s^" % refspec],
-            stdout=subprocess.PIPE,
-            )
-
-        changes = set()
-        for line in p.stdout:
-            changes.add(line.rstrip())
-
-        self._changes[svnrev] = changes
+        self._changes[svnrev] = changes = git_diff_files(refspec, "%s^" % refspec)
         return changes
 
     def register(self, svnrev):
@@ -689,6 +693,8 @@ for commit in collect_commits(p.stdout):
             reverts.make_recommit(svn_commit, svnrev, head)
             git_reset(head)
 
+    # Make actual changes
+    commit["files"] = git_diff_files(master)
     master = git_head()
 
     props["commit"] = master
