@@ -343,6 +343,24 @@ class RevertController:
 
         run_cmd(["git", "branch", "-f", recommit_ref, git_head()], stdout=True)
 
+    def check_graduated(self, svn_commit):
+        git_reset(svn_commit)
+        # Check merge commit (HEAD) is empty
+        if not eval_cmd("git diff --quiet HEAD^ HEAD"):
+            return
+
+        for svnrev in self._svnrevs:
+            revert_ref = self.refspec(svnrev)
+            if not do_merge([revert_ref], commit=False):
+                git_reset()
+                continue
+            if not eval_cmd("git diff --quiet --cached HEAD"):
+                continue
+
+            git_reset()
+            print("\tr%d has been graduated." % svnrev)
+            run_cmd(["git", "branch", "-D", revert_ref, self.refspec_m(svnrev)], stdout=True)
+
 # git log --format=raw --show-notes
 def collect_commits(fh):
     commit = None
@@ -649,7 +667,14 @@ for commit in collect_commits(p.stdout):
     elif not local_reverts:
         print("\tApplying r%d..." % svnrev)
 
-        if not eval_cmd(["git", "merge", "-m", "Merged r%d" % svnrev, svn_commit], stdout=True):
+        if do_merge([svn_commit], ff=True, msg="Merged r%d" % svnrev, stdout=True):
+
+            # if files are present but commit is empty, check graduation.
+            if commit["files"]:
+                head = git_head()
+                reverts.check_graduated(svn_commit)
+                git_reset(head)
+        else:
             # Chain revert
             revert_h = reverts.revert(svn_commit, svnrev, master)
             commit["files"]=set()
