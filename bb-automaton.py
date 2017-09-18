@@ -154,9 +154,9 @@ def git_reset(head="HEAD"):
     run_cmd(["git", "reset", "-q", '--hard', head])
 
 # Oneliner expects success.
-def git_head():
+def git_head(ref="HEAD"):
     p = subprocess.Popen(
-        ["git", "rev-parse", "HEAD"],
+        ["git", "rev-parse", ref],
         stdout=subprocess.PIPE,
         )
     m = re.match(r'^([0-9a-f]{40})', p.stdout.readline())
@@ -650,11 +650,11 @@ for commit in collect_commits(p.stdout):
         if do_merge(local_reverts, ff=False):
             print("\trevert: Applied %s" % str(local_reverts))
             commit["files"]=set()
-            master = git_head()
+            head = git_head() # Don't update master here.
 
             # Make recommits
-            reverts.make_recommit(svn_commit, svnrev, master)
-            git_reset(master)
+            reverts.make_recommit(svn_commit, svnrev, head)
+            git_reset(head)
         else:
             print("\trevert: Local reverts failed. %s" % str(local_reverts))
             git_reset(master)
@@ -683,11 +683,11 @@ for commit in collect_commits(p.stdout):
             # FIXME: Add message
             assert do_merge([revert_ref])
             print("\tApplied new %s" % revert_ref)
-            master = git_head()
 
             # Make recommits
-            reverts.make_recommit(svn_commit, svnrev, master)
-            git_reset(master)
+            head = git_head()
+            reverts.make_recommit(svn_commit, svnrev, head)
+            git_reset(head)
 
     master = git_head()
 
