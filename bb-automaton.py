@@ -374,6 +374,18 @@ class RevertController:
             print("\tr%d has been graduated." % svnrev)
             run_cmd(["git", "branch", "-D", revert_ref, self.refspec_m(svnrev)], stdout=True)
 
+class TopicsManager:
+    def __init__(self):
+        self._changes = {}
+
+    def changes(self, staged_ref):
+        if staged_ref in self._changes:
+            return self._changes[staged_ref]
+
+        base = git_merge_base(upstream_commit, staged_ref)
+        self._changes[staged_ref] = changes = git_diff_files(base, staged_ref)
+        return changes
+
 # git log --format=raw --show-notes
 def collect_commits(fh):
     commit = None
@@ -528,28 +540,51 @@ for builder in builders["builders"]:
                 culprit_svnrev = svnrev
                 first_ss = ss
 
-# Git
-
+# Retrieve all branches
 p = subprocess.Popen(
-    ["git", "branch", "-v"],
+    ["git", "branch", "-av"],
     stdout=subprocess.PIPE,
     )
 
 reverts = RevertController()
 master = None
 
+unstaged_topics = []
+staged_topics = {}
+topics_man = TopicsManager()
+
+generated_branches = [
+    "master",
+    "recommits/",
+    "rejected/",
+    "reverts/",
+    "staged/",
+    "test/master",
+    ]
+
 # git-branch is sorted
 for line in p.stdout:
     r={}
     if re_match(r'^.\s+reverts/r(\d+)', line, r):
         svnrev = int(r["m"].group(1))
-        print("reverts/r%d" % svnrev)
+        print("\tBranch: %s" % reverts.refspec(svnrev))
         reverts.register(svnrev)
     elif re_match(r'^.\s+test/master', line, r):
         # Override upstream_commit for testing
         upstream_commit = "test/master"
     elif re_match(r'^.\s+master\s+([0-9a-f]+)', line, r):
         master = r["m"].group(1)
+    elif re.match(r'^\s+remotes/dev/('+'|'.join(generated_branches)+')', line):
+        pass
+    elif re_match(r'^\s+staged/(\S+)\.r(\d+)\s+', line, r):
+        topic_svnrev = int(r["m"].group(2))
+        topics = staged_topics.get(topic_svnrev, [])
+        topics.append(r["m"].group(1))
+        staged_topics[topic_svnrev] = topics
+        print("\tTopics(r%d): %s" % (topic_svnrev, topics[-1]))
+    elif re_match(r'^\s+remotes/dev/(\S+)\s+', line, r):
+        unstaged_topics.append(r["m"].group(1))
+        print("\tTopics: %s" % unstaged_topics[-1])
 
 p.wait()
 
@@ -604,11 +639,13 @@ p = subprocess.Popen(
     stdout=subprocess.PIPE,
     )
 
+last_svnrev = None
+
 for commit in collect_commits(p.stdout):
     svn_commit = commit["commit"]
     m = re.match('^r(\d+)', commit["revision"]) # rNNNNNN
     assert m
-    svnrev = int(m.group(1))
+    last_svnrev = svnrev = int(m.group(1))
     props={
         "commit": svn_commit,
         }
@@ -652,6 +689,31 @@ for commit in collect_commits(p.stdout):
         graduated.append(git_head())
 
         reverts.remove(revert_svnrev)
+
+    # Check graduation for staged topics
+    for topic_svnrev,topics in staged_topics.items():
+        if topic_svnrev > svnrev:
+            continue
+
+        for topic in list(topics):
+            staged_ref = "staged/%s.r%d" % (topic, topic_svnrev)
+
+            # Don't check if each revert doesn't touch the commit.
+            if not commit["files"].intersection(topics_man.changes(staged_ref)):
+                print("\tgrad: Skipping %s" % staged_ref)
+                continue
+
+            print("\tgrad: Checking %s" % staged_ref)
+            git_reset(svn_commit)
+            if not eval_cmd(["git", "merge", "--squash", staged_ref]):
+                continue
+            if not eval_cmd("git diff --quiet --cached"):
+                continue
+            # Merge isn't affected. Assume graduated.
+            print("\tgrad: %s is graduated." % staged_ref)
+            topics.remove(topic)
+            run_cmd(["git", "branch", "-D", staged_ref], stdout=True)
+            run_cmd(["git", "push", "dev", ":%s" % staged_ref])
 
     git_reset(master)
 
@@ -721,6 +783,149 @@ for commit in collect_commits(p.stdout):
     if post_commit(commit):
         run_cmd(["git", "branch", "-f", "master", master])
 
+    # Push past-staged topics
+    if svnrev in staged_topics:
+        topics_svnrev = svnrev
+
+        for topic in list(staged_topics[topics_svnrev]):
+            staged_ref = "staged/%s.r%d" % (topic, topics_svnrev)
+            print("\t%s: Merging..." % staged_ref)
+
+            cands = attempt_merge(staged_ref, list(reverts.gen_recommits(topics_svnrev)))
+
+            git_reset(master)
+            if not do_merge([staged_ref] + cands):
+                # Reject
+                rejected_ref = "rejects/topic"
+                run_cmd(["git", "branch", "-M", staged_ref, rejected_ref])
+                run_cmd(["git", "push", "dev",
+                         # Remove staged
+                         ":%s" % staged_ref,
+                         # Push rejected
+                         "+%s:%s" % (rejected_ref, rejected_ref),
+                         ], stdout=True)
+                # Unregister
+                staged_topics[topics_svnrev].remove(topic)
+                print("\t%s: => %s" % (staged_ref, rejected_ref))
+                continue
+
+            # Retrieve original message
+            p = subprocess.Popen(
+                [
+                    "git", "log",
+                    "--no-walk",
+                    "--format=raw",
+                    "--stat=1024,1000",
+                    staged_ref,
+                    ],
+                stdout=subprocess.PIPE,
+                )
+            commits = list(collect_commits(p.stdout))
+            assert p.wait() == 0
+            assert len(commits)==1
+            commit = commits[0]
+            commit["revision"] = "dev/%s" % topic
+            commit["revlink"] = "https://github.com/llvm-project/llvm-project-dev/commits/%s" % staged_ref
+
+            # Get diff
+            commit["files"] = topics_man.changes(staged_ref)
+
+            master = git_head()
+            commit["properties"]["commit"] = git_head()
+            commit["project"] = master
+
+            commit["properties"]=json.dumps(commit["properties"])
+            commit["files"]=json.dumps(sorted(commit["files"]))
+
+            if post_commit(commit):
+                run_cmd(["git", "branch", "-f", "master", master])
+                print("\t%s: Successfully merged." % staged_ref)
+
 p.wait()
+
+# Get the latest svnrev
+# (Note, collect_commits may return [])
+if last_svnrev is None:
+    # Retrieve origin/master
+    p = subprocess.Popen(
+        [
+            "git", "log",
+            "--no-walk",
+            "--format=raw", "--show-notes",
+            "--stat=1024,1000",
+            upstream_commit,
+            ],
+        stdout=subprocess.PIPE,
+        )
+    commits = list(collect_commits(p.stdout))
+    assert p.wait() == 0
+    assert len(commits)==1
+    commit = commits[0]
+    m = re.match(r'r(\d+)', commit["revision"])
+    assert m, commit
+    last_svnrev = int(m.group(1))
+
+# Pick up topics
+#   remotes/dev/topic
+#   rejects/topic
+#   staged/topic.rXXXXXX
+for topic in unstaged_topics:
+    print("\tTopic: %s" % topic)
+    topic_ref = "remotes/dev/%s" % topic
+    rejected_ref = "rejects/%s" % topic
+    staged_ref = "staged/%s.r%d" % (topic, last_svnrev)
+
+    # confirm if it applies to master with recommits
+    git_reset("master")
+    cands = attempt_merge(topic_ref, list(reverts.gen_recommits()))
+
+    git_reset("master")
+    if not do_merge(cands + [topic_ref]):
+        # If it isn't mergeable, move it to "rejects/"
+        print("\tTopic: Reject %s" % topic)
+        run_cmd(["git", "branch", "-f", rejected_ref])
+        run_cmd(["git", "push", "dev",
+                 ":%s" % topic,
+                 "+refs/remotes/dev/%s:refs/heads/%s" % rejected_ref])
+        continue
+
+    # Retrieve original message
+    p = subprocess.Popen(
+        [
+            "git", "log",
+            "--no-walk",
+            "--format=raw",
+            "--stat=1024,1000",
+            topic_ref,
+        ],
+        stdout=subprocess.PIPE,
+        )
+    commits = list(collect_commits(p.stdout))
+    assert p.wait() == 0
+    assert len(commits)==1
+    commit = commits[0]
+    commit["revision"] = "dev/%s" % topic
+    commit["revlink"] = "https://github.com/llvm-project/llvm-project-dev/commits/%s" % staged_ref
+    commit["properties"]["commit"] = git_head()
+
+    # Get diff
+    commit["files"] = git_diff_files("master")
+
+    commit["properties"]=json.dumps(commit["properties"])
+    commit["files"]=json.dumps(sorted(commit["files"]))
+
+    master = git_head()
+    commit["project"] = master
+
+    if post_commit(commit):
+        run_cmd(["git", "branch", "-f", "master", master])
+
+        run_cmd(["git", "branch", "-f", staged_ref, topic_ref])
+        run_cmd(["git", "push", "dev",
+                 # Remove original
+                 ":%s" % topic,
+                 # Push staged_ref
+                 "+%s:%s" % (staged_ref, staged_ref),
+                 ], stdout=True)
 
 #EOF
