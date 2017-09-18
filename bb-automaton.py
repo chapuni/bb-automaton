@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -123,14 +124,19 @@ def get_culprit_ss(builder):
     return culprit_ss
 
 # Oneliner expects success.
-def eval_cmd(args, stdout=False, stderr=False, report=False):
+def eval_cmd(args, stdout=False, stderr=False, report=False, name=None, email=None):
     if isinstance(args, str):
         args = args.split()
+
+    env = os.environ
+    if name is not None and email is not None:
+        env = dict(os.environ, GIT_AUTHOR_NAME=name, GIT_AUTHOR_EMAIL=email)
 
     p = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=env,
         )
     o = ''.join(p.stdout.readlines())
     e = ''.join(p.stderr.readlines())
@@ -188,7 +194,7 @@ def git_diff_files(commit, commit2="HEAD"):
 
     return changes
 
-def do_merge(commits, msg=None, ff=False, commit=True):
+def do_merge(commits, msg=None, ff=False, commit=True, **kwargs):
     cmdline = ["git", "merge"]
     if not commit:
         cmdline.append("--no-commit")
@@ -197,7 +203,7 @@ def do_merge(commits, msg=None, ff=False, commit=True):
     if msg:
         cmdline += ["-m", msg]
 
-    return eval_cmd(cmdline + commits)
+    return eval_cmd(cmdline + commits, **kwargs)
 
 def attempt_merge(commit, cands):
     i = 0
@@ -268,7 +274,7 @@ class RevertController:
         run_cmd(["git", "branch", "-D", self.refspec(svnrev), self.refspec_m(svnrev)], stdout=True)
 
     # This moves HEAD
-    def revert(self, svn_commit, svnrev, master, msg=None):
+    def revert(self, svn_commit, svnrev, master, msg=None, name=None, email=None):
         git_reset(svn_commit)
 
         if msg:
@@ -276,6 +282,10 @@ class RevertController:
             cmdline = ["git", "commit", "-m", msg]
         else:
             cmdline = ["git", "revert", "--no-edit", svn_commit]
+
+        env = os.environ
+        if name is not None and email is not None:
+            env = dict(os.environ, GIT_AUTHOR_NAME=name, GIT_AUTHOR_EMAIL=email)
 
         p = subprocess.Popen(
             cmdline,
@@ -309,7 +319,7 @@ class RevertController:
 
     # Make recommit with HEAD.
     # It requires master is already reverted.
-    def make_recommit(self, svn_commit, svnrev, master):
+    def make_recommit(self, svn_commit, svnrev, master, name, email):
         # Make recommit on revert.
         # FIXME: Update commit log with svnrev
         git_reset(self.refspec(svnrev))
@@ -317,6 +327,7 @@ class RevertController:
         p = subprocess.Popen(
             ["git", "commit", "-m", "Recommit r%d" % svnrev],
             stdout=subprocess.PIPE,
+            env = dict(os.environ, GIT_AUTHOR_NAME=name, GIT_AUTHOR_EMAIL=email),
             )
         line = ''.join(p.stdout.readlines())
         m = re.match(r'\[detached HEAD\s+([0-9a-f]+)\]', line)
@@ -340,7 +351,7 @@ class RevertController:
             msg += " with " + ", ".join(recommit_cand)
         recommit_cand.append(recommit_h)
         print("\tRecommit r%d: %s" % (svnrev, msg))
-        r = do_merge(recommit_cand, msg=msg, ff=True)
+        r = do_merge(recommit_cand, msg=msg, ff=True, name=name, email=email)
         assert r
 
         run_cmd(["git", "branch", "-f", recommit_ref, git_head()], stdout=True)
@@ -353,7 +364,7 @@ class RevertController:
 
         for svnrev in self._svnrevs:
             revert_ref = self.refspec(svnrev)
-            if not do_merge([revert_ref], commit=False):
+            if not do_merge([revert_ref], commit=False, GIT_AUTHOR_NAME=name, GIT_AUTHOR_EMAIL=email):
                 git_reset()
                 continue
             if not eval_cmd("git diff --quiet --cached HEAD"):
@@ -603,6 +614,10 @@ for commit in collect_commits(p.stdout):
         }
     del commit["commit"]
 
+    m = re.match(r'^(.+)\s<([^>]*)>$', commit["author"])
+    author_name = m.group(1)
+    author_email = m.group(2)
+
     # FIXME: Invalidate ssid with api.
     if invalidated_ssid is not None:
         props["invalidated_changes"] = invalidated_ssid
@@ -632,7 +647,7 @@ for commit in collect_commits(p.stdout):
         print("\tgrad: %s is graduated." % revert_ref)
 
         # Make grad commit.
-        r = do_merge([revert_ref])
+        r = do_merge([revert_ref], name=author_name, email=author_email)
         assert r
         graduated.append(git_head())
 
@@ -649,13 +664,13 @@ for commit in collect_commits(p.stdout):
                 continue
             local_reverts.append(reverts.refspec(revert_svnrev))
         assert local_reverts
-        if do_merge(local_reverts, ff=False):
+        if do_merge(local_reverts, ff=False, name=author_name, email=author_email):
             print("\trevert: Applied %s" % str(local_reverts))
             commit["files"]=set()
             head = git_head() # Don't update master here.
 
             # Make recommits
-            reverts.make_recommit(svn_commit, svnrev, head)
+            reverts.make_recommit(svn_commit, svnrev, head, name=author_name, email=author_email)
             git_reset(head)
         else:
             print("\trevert: Local reverts failed. %s" % str(local_reverts))
@@ -669,7 +684,7 @@ for commit in collect_commits(p.stdout):
     elif not local_reverts:
         print("\tApplying r%d..." % svnrev)
 
-        if do_merge([svn_commit], ff=True, msg="Merged r%d" % svnrev, stdout=True):
+        if do_merge([svn_commit], ff=True, msg="Merged r%d" % svnrev, stdout=True, name=author_name, email=author_email):
 
             # if files are present but commit is empty, check graduation.
             if commit["files"]:
@@ -683,12 +698,12 @@ for commit in collect_commits(p.stdout):
             revert_ref = reverts.refspec(svnrev)
             git_reset(master)
             # FIXME: Add message
-            assert do_merge([revert_ref])
+            assert do_merge([revert_ref], name=author_name, email=author_email)
             print("\tApplied new %s" % revert_ref)
 
             # Make recommits
             head = git_head()
-            reverts.make_recommit(svn_commit, svnrev, head)
+            reverts.make_recommit(svn_commit, svnrev, head, name=author_name, email=author_email)
             git_reset(head)
 
     # Make actual changes
