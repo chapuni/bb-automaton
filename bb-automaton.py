@@ -629,7 +629,7 @@ for commit in collect_commits(p.stdout):
                 continue
             local_reverts.append(reverts.refspec(revert_svnrev))
         assert local_reverts
-        if eval_cmd(["git", "merge", "--no-ff"] + local_reverts):
+        if do_merge(local_reverts, ff=False):
             print("\trevert: Applied %s" % str(local_reverts))
             commit["files"]=set()
             master = git_head()
@@ -645,7 +645,7 @@ for commit in collect_commits(p.stdout):
     # Apply svn HEAD
     if graduated:
         print("\tgrad: Applying graduated commit: %s" % graduated)
-        run_cmd(["git", "merge", "--no-ff"] + graduated)
+        assert do_merge(graduated, ff=False)
     elif not local_reverts:
         print("\tApplying r%d..." % svnrev)
 
@@ -656,7 +656,7 @@ for commit in collect_commits(p.stdout):
             revert_ref = reverts.refspec(svnrev)
             git_reset(master)
             # FIXME: Add message
-            run_cmd(["git", "merge", revert_ref])
+            assert do_merge([revert_ref])
             print("\tApplied new %s" % revert_ref)
             master = git_head()
 
