@@ -205,6 +205,7 @@ def do_merge(commits, msg=None, ff=False, commit=True, **kwargs):
 
     return eval_cmd(cmdline + commits, **kwargs)
 
+# This depends on "master"
 def attempt_merge(commit, cands):
     i = 0
     while cands and i < len(cands):
@@ -231,6 +232,10 @@ class RevertController:
 
         # rev:set() changed files
         self._changes = {}
+
+        # Authors by rev
+        self._names = {}
+        self._emails = {}
 
     # For iterator
     def __iter__(self):
@@ -262,12 +267,23 @@ class RevertController:
         self._changes[svnrev] = changes = git_diff_files(refspec, "%s^" % refspec)
         return changes
 
-    def register(self, svnrev):
+    def register(self, svnrev, name, email):
         if svnrev in self._svnrevs:
             self._svnrevs.remove(svnrev)
         self._svnrevs.append(svnrev)
+
+        if svnrev not in self._names:
+            self._names[svnrev] = set()
+        if name is not None:
+            self._names[svnrev].add(name)
+
+        if svnrev not in self._emails:
+            self._emails[svnrev] = set()
+        if email is not None:
+            self._emails[svnrev].add(email)
+
         # FIXME: Do smarter!
-        self._svnrevs = list(reversed(sorted(self._svnrevs)))
+        self._svnrevs.sort(key=lambda x: -x)
 
     def remove(self, svnrev):
         self._svnrevs.remove(svnrev)
@@ -299,8 +315,7 @@ class RevertController:
 
         revert_h = m.group(1)
 
-        self._svnrevs.append(svnrev)
-        self._svnrevs.sort(key=lambda x: -x)
+        self.register(svnrev, name, email)
         assert len(self._svnrevs) == 1 or self._svnrevs[0] > self._svnrevs[1], "<%s>" % str(self._svnrevs)
 
         revert_ref = self.refspec(svnrev)
@@ -311,11 +326,28 @@ class RevertController:
 
         return revert_h
 
-    def gen_recommits(self, svnrev=None):
+    def gen_recommits(self, svnrev=None, names=None, emails=None, want_tuple=False):
         for rev in reversed(self._svnrevs):
             if svnrev is not None and rev >= svnrev:
                 break
-            yield self.refspec_m(rev)
+
+            if not want_tuple:
+                yield self.refspec_m(rev)
+                continue
+
+            if svnrev not in self._names:
+                self._names[svnrev] = set()
+
+            if svnrev not in self._emails:
+                self._emails[svnrev] = set()
+
+            if names is None or (self._names[svnrev] & names):
+                yield (self.refspec_m(rev), self._names[svnrev], self._emails[svnrev])
+                continue
+
+            if emails is None or (self._emails[svnrev] & emails):
+                yield (self.refspec_m(rev), self._names[svnrev], self._emails[svnrev])
+                continue
 
     # Make recommit with HEAD.
     # It requires master is already reverted.
@@ -542,7 +574,12 @@ for builder in builders["builders"]:
 
 # Retrieve all branches
 p = subprocess.Popen(
-    ["git", "branch", "-av"],
+    [
+        "git", "log",
+        "--no-walk",
+        "--branches", "--remotes=dev",
+        "--format=%aN%H%d%aE",
+        ],
     stdout=subprocess.PIPE,
     )
 
@@ -554,6 +591,7 @@ staged_topics = {}
 topics_man = TopicsManager()
 
 generated_branches = [
+    "HEAD",
     "master",
     "recommits/",
     "rejected/",
@@ -562,31 +600,47 @@ generated_branches = [
     "test/master",
     ]
 
-# git-branch is sorted
+reverted = {}
+recommitted = {}
 for line in p.stdout:
-    r={}
-    if re_match(r'^.\s+reverts/r(\d+)', line, r):
-        svnrev = int(r["m"].group(1))
-        print("\tBranch: %s" % reverts.refspec(svnrev))
-        reverts.register(svnrev)
-    elif re_match(r'^.\s+test/master', line, r):
-        # Override upstream_commit for testing
-        upstream_commit = "test/master"
-    elif re_match(r'^.\s+master\s+([0-9a-f]+)', line, r):
-        master = r["m"].group(1)
-    elif re.match(r'^\s+remotes/dev/('+'|'.join(generated_branches)+')', line):
-        pass
-    elif re_match(r'^\s+staged/(\S+)\.r(\d+)\s+', line, r):
-        topic_svnrev = int(r["m"].group(2))
-        topics = staged_topics.get(topic_svnrev, [])
-        topics.append(r["m"].group(1))
-        staged_topics[topic_svnrev] = topics
-        print("\tTopics(r%d): %s" % (topic_svnrev, topics[-1]))
-    elif re_match(r'^\s+remotes/dev/(\S+)\s+', line, r):
-        unstaged_topics.append(r["m"].group(1))
-        print("\tTopics: %s" % unstaged_topics[-1])
+    r = {}
+    m = re.match(r'^(.+)([0-9a-z]{40})\s*\(([^\)]+)\)(\S+)', line)
+    assert m, "<%s>" % line.rstrip()
+    name,h,refs,email = m.groups()
+
+    for ref in refs.split(', '):
+        if ref=="master":
+            master = h
+        elif ref=="test/master":
+            # Override upstream_commit for testing
+            upstream_commit = "test/master"
+        elif re_match(r'^reverts/r(\d+)', ref, r):
+            svnrev = int(r["m"].group(1))
+            print("\tBranch: %s" % reverts.refspec(svnrev))
+            reverted[svnrev] = (name, email)
+        elif re_match(r'^recommits/r(\d+)', ref, r):
+            svnrev = int(r["m"].group(1))
+            print("\tBranch: %s" % reverts.refspec_m(svnrev))
+            recommitted[svnrev] = (name, email)
+        elif re.match(r'^dev/('+'|'.join(generated_branches)+')', ref):
+            pass
+        elif re_match(r'^staged/(\S+)\.r(\d+)', ref, r):
+            topic_svnrev = int(r["m"].group(2))
+            topics = staged_topics.get(topic_svnrev, [])
+            topics.append(r["m"].group(1))
+            staged_topics[topic_svnrev] = topics
+            print("\tTopics(r%d): %s" % (topic_svnrev, topics[-1]))
+        elif re_match(r'dev/(\S+)', ref, r):
+            unstaged_topics.append(r["m"].group(1))
+            print("\tTopics: %s" % unstaged_topics[-1])
 
 p.wait()
+
+for svnrev in reverted.keys():
+    if  svnrev in recommitted:
+        reverts.register(svnrev, recommitted[svnrev][0], recommitted[svnrev][1])
+    else:
+        reverts.register(svnrev, reverted[svnrev][0], reverted[svnrev][1])
 
 assert master is not None
 
@@ -754,19 +808,46 @@ for commit in collect_commits(p.stdout):
                 reverts.check_graduated(svn_commit)
                 git_reset(head)
         else:
-            # Chain revert
-            revert_h = reverts.revert(svn_commit, svnrev, master)
-            commit["files"]=set()
-            revert_ref = reverts.refspec(svnrev)
-            git_reset(master)
-            # FIXME: Add message
-            assert do_merge([revert_ref], name=author_name, email=author_email)
-            print("\tApplied new %s" % revert_ref)
+            # Rather than chain-revert, attempt to commit.
+            interested_names = set([author_name])
+            interested_emails = set([author_email])
 
-            # Make recommits
-            head = git_head()
-            reverts.make_recommit(svn_commit, svnrev, head, name=author_name, email=author_email)
-            git_reset(head)
+            # At first, make the least set of cands.
+            cands_set = set(attempt_merge(svn_commit, list(reverts.gen_recommits(svnrev))))
+
+            # Pick up interested users from cands
+            for ref,names,emails in reverts.gen_recommits(svnrev, want_tuple=True):
+                if ref in cands_set:
+                    interested_names |= names
+                    interested_emails |= emails
+
+            # Generate interested_set
+            cands_set |= set([t[0] for t in reverts.gen_recommits(svnrev, want_tuple=True, names=interested_names, emails=interested_emails)])
+
+            # Regenerate cands
+            cands = []
+            for cand in reverts.gen_recommits(svnrev):
+                if cand in cands_set:
+                    cands.append(cand)
+
+            git_reset(master)
+            if do_merge(cands + [svn_commit], stdout=True):
+                print("\tApplied r%d with %s" % (svnrev, str(cands)))
+                # FIXME: Mark proerty as it is synthesized
+            else:
+                # Chain revert
+                revert_h = reverts.revert(svn_commit, svnrev, master)
+                commit["files"]=set()
+                revert_ref = reverts.refspec(svnrev)
+                git_reset(master)
+                # FIXME: Add message
+                assert do_merge([revert_ref], name=author_name, email=author_email)
+                print("\tApplied new %s" % revert_ref)
+
+                # Make recommits
+                head = git_head()
+                reverts.make_recommit(svn_commit, svnrev, head, name=author_name, email=author_email)
+                git_reset(head)
 
     # Make actual changes
     commit["files"] = git_diff_files(master)
