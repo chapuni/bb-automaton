@@ -147,6 +147,16 @@ def git_head():
     p.wait()
     return m.group(1)
 
+def git_merge_base(*args):
+    p = subprocess.Popen(
+        ["git", "merge-base"] + list(args),
+        stdout=subprocess.PIPE,
+        )
+    m = re.match(r'^([0-9a-f]{40})', p.stdout.readline())
+    assert m
+    p.wait()
+    return m.group(1)
+
 def do_merge(commits, msg=None, ff=False, commit=True):
     cmdline = ["git", "merge"]
     cmdline_no_commit = []
@@ -504,14 +514,7 @@ run_cmd(["git", "checkout", "-qf", master])
 # Seek culprit rev, rewind and revert
 invalidated_ssid = None
 if culprit_svnrev is not None:
-    p = subprocess.Popen(
-        ["git", "merge-base", first_ss["project"], upstream_commit],
-        stdout=subprocess.PIPE,
-        )
-    m = re.match(r'^([0-9a-f]{40})', p.stdout.readline())
-    assert m
-    svn_commit = m.group(1)
-    p.wait()
+    svn_commit = git_merge_base(first_ss["project"], upstream_commit)
 
     revert_ref = reverts.refspec(culprit_svnrev)
 
@@ -542,14 +545,7 @@ if culprit_svnrev is not None:
         for svnrev in sorted(culprit_svnrevs.keys()):
             ss = culprit_svnrevs[svnrev]
             head = ss["project"]
-            p = subprocess.Popen(
-                ["git", "merge-base", head, upstream_commit],
-                stdout=subprocess.PIPE,
-                )
-            m = re.match(r'^([0-9a-f]{40})', p.stdout.readline())
-            assert m
-            svn_commit = m.group(1)
-            p.wait()
+            svn_commit = git_merge_base(head, upstream_commit)
             revert_h = reverts.revert(svn_commit, svnrev, head)
 else:
     # FIXME: Seek diversion of upstream
