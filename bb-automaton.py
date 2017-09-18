@@ -176,15 +176,14 @@ def git_merge_base(*args):
 
 def do_merge(commits, msg=None, ff=False, commit=True):
     cmdline = ["git", "merge"]
-    cmdline_no_commit = []
     if not commit:
-        cmdline_no_commit = ["--no-commit"]
+        cmdline.append("--no-commit")
     if not ff:
         cmdline.append("--no-ff")
     if msg:
         cmdline += ["-m", msg]
 
-    return eval_cmd(cmdline + cmdline_no_commit + commits)
+    return eval_cmd(cmdline + commits)
 
 def attempt_merge(commit, cands):
     i = 0
