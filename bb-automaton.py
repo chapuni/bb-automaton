@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 from urllib import *
 
@@ -40,6 +41,7 @@ def post_commit(commit):
 def get_recentbuilds(builderid=None, limit=24):
     q = {
         "order": "-buildid",
+        "property": "*",
         "limit": limit,
         }
 
@@ -59,37 +61,14 @@ def get_recentbuilds(builderid=None, limit=24):
     return recentbuilds
 
 def get_culprit_ss(builder):
-    good = None
-    bad = None
+    recentbuilds[builderid] = get_recentbuilds(builderid, limit=256)[builderid]
     for i,brd in enumerate(recentbuilds[builderid]):
-        if brd["results"] == 2:
-            bad = i
         if brd["results"] in (0, 1):
-            good = i
-            break
-    if good is None:
-        # Retrieve
-        recentbuilds[builderid] = get_recentbuilds(builderid, limit=256)[builderid]
-        for i,brd in enumerate(recentbuilds[builderid]):
-            if brd["results"] == 2:
-                bad = i
-            if brd["results"] in (0, 1):
-                good = i
-                break
+            return None
+        if brd["results"] != 2:
+            continue
 
-    if good is None:
-        print("warning: good is none")
-        return None
-
-    # Seek bad builds from the oldest one.
-    builds = reversed(recentbuilds[builderid][0:bad+1])
-    culprit_ss = None
-    for i,brd in enumerate(builds):
-        result = brd.get("results", -1)
-        if result is None:
-            result = -1
-
-        if result == 2:
+        if brd["properties"]["result_edge"][0] == "succ2fail(1)":
             resp = urlopen(api_url+'buildrequests?'+urlencode({
                         "buildrequestid": brd["buildrequestid"],
                         }))
@@ -104,24 +83,20 @@ def get_culprit_ss(builder):
                 bsets = json.load(resp)["buildsets"]
                 resp.close()
                 for bset in bsets:
-                    if i > 0 and bset["reason"] != "bisect":
-                        continue
+                    #if i > 0 and bset["reason"] != "bisect":
+                    #    continue
                     print("len(ss)=%d reason=<%s>" % (len(bset["sourcestamps"]), bset["reason"]))
                     for ss in bset["sourcestamps"]:
                         if ss["revision"] not in revs:
                             first_ss = ss
                             revs.append(ss["revision"])
-            print(revs)
-            if len(revs)==1:
-                assert first_ss is not None
-                assert revs[0] == first_ss["revision"]
-                culprit_ss = first_ss
-                break
+            if len(revs) == 0:
+                continue
+            assert first_ss is not None
+            print("Culprit is %s (ssid=%d)" % (first_ss["revision"], first_ss["ssid"]))
+            return first_ss
 
-    if culprit_ss is not None:
-        print("Culprit is %s (ssid=%d)" % (culprit_ss["revision"], culprit_ss["ssid"]))
-
-    return culprit_ss
+    return None
 
 # Oneliner expects success.
 def eval_cmd(args, stdout=False, stderr=False, report=False, name=None, email=None):
@@ -335,18 +310,18 @@ class RevertController:
                 yield self.refspec_m(rev)
                 continue
 
-            if svnrev not in self._names:
-                self._names[svnrev] = set()
+            if rev not in self._names:
+                self._names[rev] = set()
 
-            if svnrev not in self._emails:
-                self._emails[svnrev] = set()
+            if rev not in self._emails:
+                self._emails[rev] = set()
 
-            if names is None or (self._names[svnrev] & names):
-                yield (self.refspec_m(rev), self._names[svnrev], self._emails[svnrev])
+            if names is None or (self._names[rev] & names):
+                yield (self.refspec_m(rev), self._names[rev], self._emails[rev])
                 continue
 
-            if emails is None or (self._emails[svnrev] & emails):
-                yield (self.refspec_m(rev), self._names[svnrev], self._emails[svnrev])
+            if emails is None or (self._emails[rev] & emails):
+                yield (self.refspec_m(rev), self._names[rev], self._emails[rev])
                 continue
 
     # Make recommit with HEAD.
@@ -385,6 +360,8 @@ class RevertController:
         print("\tRecommit r%d: %s" % (svnrev, msg))
         r = do_merge(recommit_cand, msg=msg, ff=True, name=name, email=email)
         assert r
+
+        self.register(svnrev, name=name, email=email)
 
         run_cmd(["git", "branch", "-f", recommit_ref, git_head()], stdout=True)
 
@@ -568,9 +545,18 @@ for builder in builders["builders"]:
             if svnrev in culprit_svnrevs:
                 continue
             culprit_svnrevs[svnrev] = ss
-            if culprit_svnrev is None or culprit_svnrev > svnrev:
-                culprit_svnrev = svnrev
-                first_ss = ss
+            # if culprit_svnrev is None or culprit_svnrev > svnrev:
+            #     culprit_svnrev = svnrev
+            #     first_ss = ss
+
+        if first_ss is None or first_ss["ssid"] > ss["ssid"]:
+            first_ss = ss
+
+if first_ss:
+    print("========Culprit is %s (%s)" % (first_ss["revision"], first_ss["project"]))
+    m_svnrev = re.match(r'^r(\d+)$', first_ss["revision"])
+    if m_svnrev:
+        culprit_svnrev = int(m_svnrev.group(1))
 
 # Retrieve all branches
 p = subprocess.Popen(
@@ -675,7 +661,29 @@ if culprit_svnrev is not None:
             ss = culprit_svnrevs[svnrev]
             head = ss["project"]
             svn_commit = git_merge_base(head, upstream_commit)
+            print("head=%s master=%s svn=%s" % (head, master, svn_commit))
             revert_h = reverts.revert(svn_commit, svnrev, head)
+elif first_ss is not None:
+    # Doesn't revert. Just skip.
+    svn_commit = git_merge_base(first_ss["project"], upstream_commit)
+
+    # Confirm if the revert exists.
+    if False:
+        print("%s exists. Do nothing." % revert_ref)
+    else:
+        # Calculate range(ssid) to invalidate previous builds
+        # Get the latest ss.
+        resp = urlopen(api_url+'sourcestamps?limit=1&order=-ssid')
+        sourcestamps = json.load(resp)
+        resp.close()
+        # FIXME: Assumes ssid equal chid.
+        invalidated_ssid = "%d..%d" % (first_ss["ssid"], sourcestamps["sourcestamps"][0]["ssid"])
+
+        # Rewind master to one commit before the revertion.
+        master = "%s^" % first_ss["project"]
+        print("master=%s svn=%s" % (master, svn_commit))
+
+        run_cmd(["git", "branch", "-f", "master", master])
 else:
     # FIXME: Seek diversion of upstream
     pass
@@ -714,6 +722,8 @@ for commit in collect_commits(p.stdout):
         props["invalidated_changes"] = invalidated_ssid
 
     print("========Processing r%d" % svnrev)
+
+    chain_recommit = None
 
     # Check graduation
     # FIXME: Skip if change is nothing to do.
@@ -807,6 +817,14 @@ for commit in collect_commits(p.stdout):
                 head = git_head()
                 reverts.check_graduated(svn_commit)
                 git_reset(head)
+
+            # Check waiting recommits by author.
+            interests = []
+            for ref,names,emails in reverts.gen_recommits(svnrev, want_tuple=True):
+                if author_name in names or author_email in emails:
+                    interests.append(ref)
+            if commit["files"] and interests:
+                chain_recommit = interests
         else:
             # Rather than chain-revert, attempt to commit.
             interested_names = set([author_name])
@@ -864,6 +882,48 @@ for commit in collect_commits(p.stdout):
     if post_commit(commit):
         run_cmd(["git", "branch", "-f", "master", master])
 
+    # Recommit chained by author
+    if chain_recommit:
+        msg = "Recommit: %s" % str(chain_recommit)
+
+        git_reset(master)
+        assert do_merge(chain_recommit, stdout=True, name=author_name, email=author_email, msg=msg)
+        print("\tRecommit for %s: %s" % (author_name, str(chain_recommit)))
+
+        head = git_head()
+        # FIXME: Mark it synthesized.
+        m = re.match(r'recommits/(.+)', chain_recommit[-1])
+        commit = {
+            "comments": msg,
+            "revision": "r%d+%s" % (svnrev, m.group(1)),
+            "revlink": "",
+            "when": int(time.time()),
+            "author": "%s <%s>" % (author_name, author_email),
+            "files": set(),
+            "project": head,
+            "branch": "master",
+            "repository": "",
+            "category": "",
+            "codebase": "",
+            "properties": {"commit": head},
+            }
+
+        # FIXME: Invalidate ssid with api.
+        if invalidated_ssid is not None:
+            commit["properties"]["invalidated_changes"] = invalidated_ssid
+
+        commit["files"]=git_diff_files("master")
+        if commit["files"]:
+            commit["properties"]=json.dumps(commit["properties"])
+            commit["files"]=json.dumps(sorted(commit["files"]))
+
+            master = git_head()
+            if post_commit(commit):
+                print("\tRecommit for %s: done." % author_name)
+                run_cmd(["git", "branch", "-f", "master", master])
+        else:
+            print("\tRecommit for %s: (skipped due to empty commit)" % author_name)
+
     # Push past-staged topics
     if svnrev in staged_topics:
         topics_svnrev = svnrev
@@ -905,6 +965,11 @@ for commit in collect_commits(p.stdout):
             assert p.wait() == 0
             assert len(commits)==1
             commit = commits[0]
+
+            # FIXME: Invalidate ssid with api.
+            if invalidated_ssid is not None:
+                commit["properties"]["invalidated_changes"] = invalidated_ssid
+
             commit["revision"] = "dev/%s" % topic
             commit["revlink"] = "https://github.com/llvm-project/llvm-project-dev/commits/%s" % staged_ref
 
@@ -985,6 +1050,11 @@ for topic in unstaged_topics:
     assert p.wait() == 0
     assert len(commits)==1
     commit = commits[0]
+
+    # FIXME: Invalidate ssid with api.
+    if invalidated_ssid is not None:
+        commit["properties"]["invalidated_changes"] = invalidated_ssid
+
     commit["revision"] = "dev/%s" % topic
     commit["revlink"] = "https://github.com/llvm-project/llvm-project-dev/commits/%s" % staged_ref
     commit["properties"]["commit"] = git_head()
