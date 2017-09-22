@@ -199,9 +199,107 @@ def attempt_merge(commit, cands):
 
     return cands
 
+class BranchManager:
+    def __init__(self, generated=[], ignored=[]):
+        self._branches = {}
+        self._pushed_refs = None
+
+        for ref in generated:
+            m = re.match(r'^([^/]+)/$', ref)
+            if m:
+                self._branches[m.group(1)] = {}
+
+        # Retrieve all branches
+        p = subprocess.Popen(
+            [
+                "git", "log",
+                "--no-walk",
+                "--branches", "--remotes=dev",
+                "--format=%aN%H%d%aE",
+                ],
+            stdout=subprocess.PIPE,
+            )
+
+        for line in p.stdout:
+            r = {}
+            m = re.match(r'^(.+)([0-9a-z]{40})\s*\(([^\)]+)\)(\S+)', line)
+            assert m, "<%s>" % line.rstrip()
+            name,h,refs,email = m.groups()
+
+            for ref in refs.split(', '):
+                if re.match(r'^dev/('+'|'.join(generated + ignored)+')', ref):
+                    pass
+                rs = ref.split('/')
+                rr = rs.pop()
+                d = self._branches
+                for r in rs:
+                    if r not in d:
+                        d[r] = {}
+                    d = d[r]
+                d[rr] = dict(
+                    name=name,
+                    email=email,
+                    h=h,
+                    )
+
+        p.wait()
+
+    # Accessors
+    def __contains__(self, i):
+        return i in self._branches
+
+    def __getitem__(self, i):
+        return self._branches[i]
+
+    def keys(self):
+        return self._branches.keys()
+
+    # Git-push services
+    def push_refs(self):
+        if self._pushed_refs is None:
+            return
+        run_cmd(["git", "push", "dev"] + list(self._pushed_refs))
+        self._pushed_refs = None
+
+    def push_later(self):
+        if self._pushed_refs is None:
+            self._pushed_refs = set()
+
+    def push_ref(self, ref):
+        if self._pushed_refs is None:
+            run_cmd(["git", "push", "dev", ref])
+        else:
+            self._pushed_refs.add(ref)
+
+    # refs methods
+    @staticmethod
+    def revert_ref(svnrev):
+        return "reverts/r%d" % svnrev
+
+    @staticmethod
+    def recommit_ref(svnrev):
+        return "recommits/r%d" % svnrev
+
+    # Basic ref methods
+    def remove(self, ref):
+        run_cmd(["git", "branch", "-D", ref])
+        self.push_ref(":%s" % ref)
+
+    # They can be removed later.
+    def may_graduate(self, svnrev):
+        ref = self.recommit_ref(svnrev)
+        run_cmd("git", "branch", "-f", "graduates/%s" % ref, ref, stdout=True)
+
+    def graduate(self, svnrev):
+        ref = self.recommit_ref(svnrev)
+        run_cmd(["git", "branch", "-M", ref, "graduates/r%d" % svnrev], stdout=True)
+        eval_cmd(["git", "branch", "-D", ref, self.revert_ref(svnrev)], stdout=True)
+
 # Revert controller
 class RevertController:
-    def __init__(self):
+    def __init__(self, branches):
+        self._branches = branches
+
         # Order by reverse revs
         self._svnrevs = []
 
@@ -260,9 +358,9 @@ class RevertController:
         # FIXME: Do smarter!
         self._svnrevs.sort(key=lambda x: -x)
 
-    def remove(self, svnrev):
-        self._svnrevs.remove(svnrev)
-        run_cmd(["git", "branch", "-D", self.refspec(svnrev), self.refspec_m(svnrev)], stdout=True)
+    # def remove(self, svnrev):
+    #     self._svnrevs.remove(svnrev)
+    #     run_cmd(["git", "branch", "-D", self.refspec(svnrev), self.refspec_m(svnrev)], stdout=True)
 
     # This moves HEAD
     def revert(self, svn_commit, svnrev, master, msg=None, name=None, email=None):
@@ -381,7 +479,8 @@ class RevertController:
 
             git_reset()
             print("\tr%d has been graduated." % svnrev)
-            run_cmd(["git", "branch", "-D", revert_ref, self.refspec_m(svnrev)], stdout=True)
+            self._branches.graduate(svnrev)
+            #run_cmd(["git", "branch", "-D", revert_ref, self.refspec_m(svnrev)], stdout=True)
 
 class TopicsManager:
     def __init__(self):
@@ -559,77 +658,40 @@ if first_ss:
     if m_svnrev:
         culprit_svnrev = int(m_svnrev.group(1))
 
-# Retrieve all branches
-p = subprocess.Popen(
-    [
-        "git", "log",
-        "--no-walk",
-        "--branches", "--remotes=dev",
-        "--format=%aN%H%d%aE",
+branches = BranchManager(
+    generated = [
+        "recommits/",
+        "rejected/",
+        "reverts/",
+        "staged/",
         ],
-    stdout=subprocess.PIPE,
+    ignored = [
+        "HEAD",
+        "master",
+        "test/master",
+        ],
     )
 
-reverts = RevertController()
-master = None
+reverts = RevertController(branches)
+topics_man = TopicsManager()
+
+for ref in branches["reverts"].keys():
+    m = re.match("^r(\d+)", ref)
+    if not m:
+        continue
+    svnrev = int(m.group(1))
+    br = branches["reverts"][ref]
+    if ref in branches["recommits"]:
+        br = branches["recommits"][ref]
+    reverts.register(svnrev, br["name"], br["email"])
 
 unstaged_topics = []
 staged_topics = {}
-topics_man = TopicsManager()
 
-generated_branches = [
-    "HEAD",
-    "master",
-    "recommits/",
-    "rejected/",
-    "reverts/",
-    "staged/",
-    "test/master",
-    ]
+if "test" in branches and "master" in branches["test"]:
+    upstream_commit = branches["test"]["master"]["h"]
 
-reverted = {}
-recommitted = {}
-for line in p.stdout:
-    r = {}
-    m = re.match(r'^(.+)([0-9a-z]{40})\s*\(([^\)]+)\)(\S+)', line)
-    assert m, "<%s>" % line.rstrip()
-    name,h,refs,email = m.groups()
-
-    for ref in refs.split(', '):
-        if ref=="master":
-            master = h
-        elif ref=="test/master":
-            # Override upstream_commit for testing
-            upstream_commit = "test/master"
-        elif re_match(r'^reverts/r(\d+)', ref, r):
-            svnrev = int(r["m"].group(1))
-            print("\tBranch: %s" % reverts.refspec(svnrev))
-            reverted[svnrev] = (name, email)
-        elif re_match(r'^recommits/r(\d+)', ref, r):
-            svnrev = int(r["m"].group(1))
-            print("\tBranch: %s" % reverts.refspec_m(svnrev))
-            recommitted[svnrev] = (name, email)
-        elif re.match(r'^dev/('+'|'.join(generated_branches)+')', ref):
-            pass
-        elif re_match(r'^staged/(\S+)\.r(\d+)', ref, r):
-            topic_svnrev = int(r["m"].group(2))
-            topics = staged_topics.get(topic_svnrev, [])
-            topics.append(r["m"].group(1))
-            staged_topics[topic_svnrev] = topics
-            print("\tTopics(r%d): %s" % (topic_svnrev, topics[-1]))
-        elif re_match(r'dev/(\S+)', ref, r):
-            unstaged_topics.append(r["m"].group(1))
-            print("\tTopics: %s" % unstaged_topics[-1])
-
-p.wait()
-
-for svnrev in reverted.keys():
-    if  svnrev in recommitted:
-        reverts.register(svnrev, recommitted[svnrev][0], recommitted[svnrev][1])
-    else:
-        reverts.register(svnrev, reverted[svnrev][0], reverted[svnrev][1])
-
-assert master is not None
+master = branches["master"]["h"]
 
 # Make sure we are alywas on detached head.
 run_cmd(["git", "checkout", "-qf", master])
@@ -642,7 +704,8 @@ if culprit_svnrev is not None:
     revert_ref = reverts.refspec(culprit_svnrev)
 
     # Confirm if the revert exists.
-    if eval_cmd(["git", "rev-parse", "--verify", "-q", revert_ref]):
+    if (eval_cmd(["git", "rev-parse", "--verify", "-q", revert_ref])
+        or eval_cmd(["git", "rev-parse", "--verify", "-q", "graduates/r%d" % culprit_svnrev])):
         print("%s exists. Do nothing." % revert_ref)
     else:
         # Calculate range(ssid) to invalidate previous builds
@@ -753,7 +816,7 @@ for commit in collect_commits(p.stdout):
         assert r
         graduated.append(git_head())
 
-        reverts.remove(revert_svnrev)
+        branches.graduate(revert_svnrev)
 
     # Check graduation for staged topics
     for topic_svnrev,topics in staged_topics.items():
@@ -852,6 +915,10 @@ for commit in collect_commits(p.stdout):
             git_reset(master)
             if do_merge(cands + [svn_commit], stdout=True):
                 print("\tApplied r%d with %s" % (svnrev, str(cands)))
+                for cand in cands:
+                    m = re.match(r'^recommits/r%d', cand)
+                    if m:
+                        branches.may_graduate(int(m.group(1)))
                 # FIXME: Mark proerty as it is synthesized
             else:
                 # Chain revert
@@ -921,6 +988,10 @@ for commit in collect_commits(p.stdout):
             master = git_head()
             if post_commit(commit):
                 print("\tRecommit for %s: done." % author_name)
+                for recommit in chain_recommit:
+                    m = re.match(r'^recommits/r%d', cand)
+                    if m:
+                        branches.may_graduate(int(m.group(1)))
                 run_cmd(["git", "branch", "-f", "master", master])
         else:
             print("\tRecommit for %s: (skipped due to empty commit)" % author_name)
