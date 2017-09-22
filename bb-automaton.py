@@ -479,17 +479,18 @@ def collect_commits(fh):
             state="stat"
             continue
         elif state=="stat":
-            if re_match("^\s+(\w[^|]+[^ |])\s+\|", line, r):
+            if re_match("^\s+(\S[^|]+[^ |])\s+\|", line, r):
                 while re_match("^\s+(\w[^|]+[^ |])\s+\|", line, r):
                     commit["files"].add(r["m"].group(1))
                     line = fh.readline()
                     continue
+            if re.match(r"^\s*\d+\sfiles\schanged,", line):
                 # Discard one line.
                 # NN files changed, NN insertions(+), NN deletions(-)
                 line = fh.readline()
             if line=="":
                 continue
-            assert line == "\n", "<%s>" % line
+            assert line == "\n", "<%s>%s" % (line,commit["commit"])
             line = fh.readline()
             state="commit"
             continue
