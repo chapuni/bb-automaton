@@ -62,41 +62,55 @@ def get_recentbuilds(builderid=None, limit=24):
 
 def get_culprit_ss(builder):
     recentbuilds[builderid] = get_recentbuilds(builderid, limit=256)[builderid]
+    blamed = False
+    found_ss = None
+    max_rev = None
+    max_ss = None
     for i,brd in enumerate(recentbuilds[builderid]):
-        if brd["results"] in (0, 1):
-            return None
-        if brd["results"] != 2:
+        if brd["results"] > 2:
             continue
 
-        if brd["properties"]["result_edge"][0] == "succ2fail(1)":
-            resp = urlopen(api_url+'buildrequests?'+urlencode({
-                        "buildrequestid": brd["buildrequestid"],
-                        }))
-            breqs = json.load(resp)["buildrequests"]
-            resp.close()
-            revs=[]
-            first_ss = None
-            for breq in breqs:
-                resp = urlopen(api_url+'buildsets?'+urlencode({
-                            "bsid": breq["buildsetid"],
-                            }))
-                bsets = json.load(resp)["buildsets"]
-                resp.close()
-                for bset in bsets:
-                    #if i > 0 and bset["reason"] != "bisect":
-                    #    continue
-                    print("len(ss)=%d reason=<%s>" % (len(bset["sourcestamps"]), bset["reason"]))
-                    for ss in bset["sourcestamps"]:
-                        if ss["revision"] not in revs:
-                            first_ss = ss
-                            revs.append(ss["revision"])
-            if len(revs) == 0:
-                continue
-            assert first_ss is not None
-            print("Culprit is %s (ssid=%d)" % (first_ss["revision"], first_ss["ssid"]))
-            return first_ss
+        if "blamed" in brd["properties"]:
+            prop_blamed = json.loads(brd["properties"]["blamed"][0])
+            if prop_blamed.get("event") == "BLAME":
+                blamed = prop_blamed["revision"]
 
-    return None
+        if brd["results"] in (0, 1):
+            if "bisect" in brd["properties"]:
+                continue
+            else:
+                break
+
+        if "result_edge" not in brd["properties"]:
+            continue
+
+        print("brd=%d %s" % (brd["buildid"], brd["properties"]["result_edge"]))
+        resp = urlopen(api_url+'buildrequests?'+urlencode({
+                    "buildrequestid": brd["buildrequestid"],
+                    }))
+        breqs = json.load(resp)["buildrequests"]
+        resp.close()
+        for breq in breqs:
+            resp = urlopen(api_url+'buildsets?'+urlencode({
+                        "bsid": breq["buildsetid"],
+                        }))
+            bsets = json.load(resp)["buildsets"]
+            resp.close()
+            for bset in bsets:
+                for ss in bset["sourcestamps"]:
+                    if blamed == ss["revision"] and found_ss is None:
+                        found_ss = ss
+                    m = re.match('r(\d+)', ss["revision"])
+                    if m and (max_rev is None or max_rev < int(m.group(1))):
+                        max_ss = ss
+                        max_rev = int(m.group(1))
+                        print("rev=%d" % max_rev)
+
+    if found_ss:
+        print("Culprit is %s (ssid=%d)" % (found_ss["revision"], found_ss["ssid"]))
+        return (found_ss, max_ss, max_rev)
+
+    return (None,None,None)
 
 # Oneliner expects success.
 def eval_cmd(args, stdout=False, stderr=False, report=False, name=None, email=None):
@@ -288,7 +302,7 @@ class BranchManager:
     # They can be removed later.
     def may_graduate(self, svnrev):
         ref = self.recommit_ref(svnrev)
-        run_cmd("git", "branch", "-f", "graduates/%s" % ref, ref, stdout=True)
+        run_cmd(["git", "branch", "-f", "graduates/%s" % ref, ref], stdout=True)
 
     def graduate(self, svnrev):
         ref = self.recommit_ref(svnrev)
@@ -379,6 +393,7 @@ class RevertController:
         p = subprocess.Popen(
             cmdline,
             stdout=subprocess.PIPE,
+            env=env,
             )
 
         line = ''.join(p.stdout.readlines())
@@ -422,6 +437,32 @@ class RevertController:
                 yield (self.refspec_m(rev), self._names[rev], self._emails[rev])
                 continue
 
+    def gen_recommits_cands(self, name, email):
+        cands = []
+
+        # Rather than chain-revert, attempt to commit.
+        interested_names = set([name])
+        interested_emails = set([email])
+
+        # At first, make the least set of cands.
+        cands_set = set(attempt_merge(svn_commit, list(self.gen_recommits(svnrev))))
+
+        # Pick up interested users from cands
+        for ref,names,emails in self.gen_recommits(svnrev, want_tuple=True):
+            if ref in cands_set:
+                interested_names |= names
+                interested_emails |= emails
+
+        # Generate interested_set
+        cands_set |= set([t[0] for t in self.gen_recommits(svnrev, want_tuple=True, names=interested_names, emails=interested_emails)])
+
+        # Regenerate cands
+        for cand in self.gen_recommits(svnrev):
+            if cand in cands_set:
+                cands.append(cand)
+
+        return cands
+
     # Make recommit with HEAD.
     # It requires master is already reverted.
     def make_recommit(self, svn_commit, svnrev, master, name, email):
@@ -445,7 +486,7 @@ class RevertController:
         git_reset(master)
         # FIXME: Try a simple case at first!
         recommit_cand = list(self.gen_recommits(svnrev))
-        print("\tRecommit r%d: candidates %s" % (svnrev,str(recommit_cand)))
+        print("\tMake-recommit r%d: candidates %s" % (svnrev,str(recommit_cand)))
 
         recommit_cand = attempt_merge(recommit_h, recommit_cand)
 
@@ -455,7 +496,7 @@ class RevertController:
         if recommit_cand:
             msg += " with " + ", ".join(recommit_cand)
         recommit_cand.append(recommit_h)
-        print("\tRecommit r%d: %s" % (svnrev, msg))
+        print("\tMake-recommit r%d: %s" % (svnrev, msg))
         r = do_merge(recommit_cand, msg=msg, ff=True, name=name, email=email)
         assert r
 
@@ -595,6 +636,22 @@ def collect_commits(fh):
             continue
         assert False, "<%s>" % line
 
+def collect_single_commit(commit):
+    p = subprocess.Popen(
+        [
+            "git", "log",
+            "--no-walk",
+            "--format=raw",
+            "--stat=1024,1000",
+            commit,
+            ],
+        stdout=subprocess.PIPE,
+        )
+    commits = list(collect_commits(p.stdout))
+    assert p.wait() == 0
+    assert len(commits)==1
+    return commits[0]
+
 # Check failures
 
 resp = urlopen(api_url+'builders')
@@ -605,6 +662,7 @@ recentbuilds = get_recentbuilds(limit=64)
 
 culprit_svnrev = None
 culprit_svnrevs = {}
+ss_info = {}
 first_ss = None
 
 for builder in builders["builders"]:
@@ -629,15 +687,29 @@ for builder in builders["builders"]:
         continue
 
     # Get last result
-    result = recentbuilds[builderid][0].get("results", -1)
+    build = recentbuilds[builderid][0]
+    result = build.get("results", -1)
     if result is None:
         result = -1
 
+    if result in (0, 1) and "blamed" in build["properties"]:
+        # Confirm if it is "the last bis good"
+        if json.loads(build["properties"]["blamed"][0]).get("event") == "BLAME":
+            result = 2
+
     print("%d : %s" % (result, builder["name"]))
     if result == 2:
-        ss = get_culprit_ss(builder)
+        ss,max_ss,max_rev = get_culprit_ss(builder)
         if ss is None:
             continue
+
+        ss_info[ss["ssid"]] = dict(
+            builderid=builderid,
+            buildid=build["buildid"],
+            buildNumber=build["number"],
+            builderName=builder["name"],
+            max_rev=max_rev,
+            )
 
         m_svnrev = re.match(r'^r(\d+)$', ss["revision"])
         if m_svnrev:
@@ -645,15 +717,12 @@ for builder in builders["builders"]:
             if svnrev in culprit_svnrevs:
                 continue
             culprit_svnrevs[svnrev] = ss
-            # if culprit_svnrev is None or culprit_svnrev > svnrev:
-            #     culprit_svnrev = svnrev
-            #     first_ss = ss
 
         if first_ss is None or first_ss["ssid"] > ss["ssid"]:
             first_ss = ss
 
 if first_ss:
-    print("========Culprit is %s (%s)" % (first_ss["revision"], first_ss["project"]))
+    print("========Culprit is %s to r%d\n(%s)" % (first_ss["revision"], ss_info[first_ss["ssid"]]["max_rev"], first_ss["project"]))
     m_svnrev = re.match(r'^r(\d+)$', first_ss["revision"])
     if m_svnrev:
         culprit_svnrev = int(m_svnrev.group(1))
@@ -698,59 +767,78 @@ run_cmd(["git", "checkout", "-qf", master])
 
 # Seek culprit rev, rewind and revert
 invalidated_ssid = None
-if culprit_svnrev is not None:
+if first_ss is not None:
+    do_rewind = False
     svn_commit = git_merge_base(first_ss["project"], upstream_commit)
 
-    revert_ref = reverts.refspec(culprit_svnrev)
+    for svnrev in sorted(culprit_svnrevs.keys()):
+        ss = culprit_svnrevs[svnrev]
+        orig_commit = collect_single_commit(svn_commit)
+        author = orig_commit["author"]
+        m = re.match(r'^(.+)\s<([^>]*)>$', author)
+        name = m.group(1)
+        email = m.group(2)
+        ss_info[ss["ssid"]].update(dict(
+                author=author,
+                name=name,
+                email=email,
+                ))
 
-    # Confirm if the revert exists.
-    if (eval_cmd(["git", "rev-parse", "--verify", "-q", revert_ref])
-        or eval_cmd(["git", "rev-parse", "--verify", "-q", "graduates/r%d" % culprit_svnrev])):
-        print("%s exists. Do nothing." % revert_ref)
+    if culprit_svnrev is not None:
+        revert_ref = reverts.refspec(culprit_svnrev)
+        # Confirm if the revert exists.
+        if (eval_cmd(["git", "rev-parse", "--verify", "-q", revert_ref])
+            or eval_cmd(["git", "rev-parse", "--verify", "-q", "graduates/r%d" % culprit_svnrev])):
+            print("%s exists. Do nothing." % revert_ref)
+        else:
+            do_rewind = True
+
+            # Rewind master to one commit before the revertion.
+            master = "%s^" % first_ss["project"]
+            run_cmd(["git", "branch", "-f", "master", master])
+
+            # Make "reverts" commits.
+            for svnrev in reversed(sorted(culprit_svnrevs.keys())):
+                ss = culprit_svnrevs[svnrev]
+                head = ss["project"]
+                svn_commit = git_merge_base(head, upstream_commit)
+                print("head=%s master=%s svn=%s" % (head, master, svn_commit))
+                si = ss_info[ss["ssid"]]
+                msg = "Revert r%d: %s\n\n" % (svnrev, si["author"])
+                msg += json.dumps(ss_info[ss["ssid"]], indent=2, sort_keys=True)
+                revert_h = reverts.revert(svn_commit, svnrev, head, msg=msg)
+                reverts.make_recommit(svn_commit, svnrev, revert_h, name=si["name"], email=si["email"])
     else:
+        # Doesn't revert. Just skip.
+
+        # Confirm if the revert exists.
+        if False:
+            print("%s exists. Do nothing." % revert_ref)
+        else:
+            do_rewind = True
+            # Rewind master to one commit before the revertion.
+            master = "%s^" % first_ss["project"]
+            print("master=%s svn=%s" % (master, svn_commit))
+
+            run_cmd(["git", "branch", "-f", "master", master])
+
+    if do_rewind:
         # Calculate range(ssid) to invalidate previous builds
-        assert first_ss is not None
         # Get the latest ss.
         resp = urlopen(api_url+'sourcestamps?limit=1&order=-ssid')
         sourcestamps = json.load(resp)
         resp.close()
         # FIXME: Assumes ssid equal chid.
         invalidated_ssid = "%d..%d" % (first_ss["ssid"], sourcestamps["sourcestamps"][0]["ssid"])
-
-        # Rewind master to one commit before the revertion.
-        master = "%s^" % first_ss["project"]
-        run_cmd(["git", "branch", "-f", "master", master])
-
-        for svnrev in sorted(culprit_svnrevs.keys()):
-            ss = culprit_svnrevs[svnrev]
-            head = ss["project"]
-            svn_commit = git_merge_base(head, upstream_commit)
-            print("head=%s master=%s svn=%s" % (head, master, svn_commit))
-            revert_h = reverts.revert(svn_commit, svnrev, head)
-elif first_ss is not None:
-    # Doesn't revert. Just skip.
-    svn_commit = git_merge_base(first_ss["project"], upstream_commit)
-
-    # Confirm if the revert exists.
-    if False:
-        print("%s exists. Do nothing." % revert_ref)
-    else:
-        # Calculate range(ssid) to invalidate previous builds
-        # Get the latest ss.
-        resp = urlopen(api_url+'sourcestamps?limit=1&order=-ssid')
-        sourcestamps = json.load(resp)
-        resp.close()
-        # FIXME: Assumes ssid equal chid.
-        invalidated_ssid = "%d..%d" % (first_ss["ssid"], sourcestamps["sourcestamps"][0]["ssid"])
-
-        # Rewind master to one commit before the revertion.
-        master = "%s^" % first_ss["project"]
-        print("master=%s svn=%s" % (master, svn_commit))
-
-        run_cmd(["git", "branch", "-f", "master", master])
 else:
     # FIXME: Seek diversion of upstream
     pass
+
+suppressed_recommits = {}
+
+for si in ss_info.values():
+    if "name" in si and "email" in si:
+        suppressed_recommits[si["name"]] = suppressed_recommits[si["email"]] = si["max_rev"]
 
 # Collect commits from git-svn
 p = subprocess.Popen(
@@ -857,11 +945,6 @@ for commit in collect_commits(p.stdout):
         if do_merge(local_reverts, ff=False, name=author_name, email=author_email):
             print("\trevert: Applied %s" % str(local_reverts))
             commit["files"]=set()
-            head = git_head() # Don't update master here.
-
-            # Make recommits
-            reverts.make_recommit(svn_commit, svnrev, head, name=author_name, email=author_email)
-            git_reset(head)
         else:
             print("\trevert: Local reverts failed. %s" % str(local_reverts))
             git_reset(master)
@@ -872,53 +955,55 @@ for commit in collect_commits(p.stdout):
         print("\tgrad: Applying graduated commit: %s" % graduated)
         assert do_merge(graduated, ff=False)
     elif not local_reverts:
+        # Check suppression of recommit
+        k = None
+        suppress_recommit = False
+        if author_name in suppressed_recommits:
+            k = author_name
+        if k is None and author_email in suppressed_recommits:
+            k = author_email
+        if k is not None and svnrev <= suppressed_recommits[k]:
+            #print("\tRecommit <%s> is suppressed until r%d." % (author_name, suppressed_recommits[k]))
+            suppress_recommit = True
+
         print("\tApplying r%d..." % svnrev)
 
         if do_merge([svn_commit], ff=True, msg="Merged r%d" % svnrev, stdout=True, name=author_name, email=author_email):
-
             # if files are present but commit is empty, check graduation.
+            head = git_head()
             if commit["files"]:
-                head = git_head()
                 reverts.check_graduated(svn_commit)
                 git_reset(head)
 
-            # Check waiting recommits by author.
-            interests = []
-            for ref,names,emails in reverts.gen_recommits(svnrev, want_tuple=True):
-                if author_name in names or author_email in emails:
-                    interests.append(ref)
-            if commit["files"] and interests:
-                chain_recommit = interests
+            if not suppress_recommit:
+                interests = []
+                for ref,names,emails in reverts.gen_recommits(svnrev, want_tuple=True):
+                    if author_name in names or author_email in emails:
+                        interests.append(ref)
+
+                if interests:
+                    chain_recommit = reverts.gen_recommits_cands(author_name, author_email)
+                    git_reset(head)
         else:
-            # Rather than chain-revert, attempt to commit.
-            interested_names = set([author_name])
-            interested_emails = set([author_email])
-
-            # At first, make the least set of cands.
-            cands_set = set(attempt_merge(svn_commit, list(reverts.gen_recommits(svnrev))))
-
-            # Pick up interested users from cands
-            for ref,names,emails in reverts.gen_recommits(svnrev, want_tuple=True):
-                if ref in cands_set:
-                    interested_names |= names
-                    interested_emails |= emails
-
-            # Generate interested_set
-            cands_set |= set([t[0] for t in reverts.gen_recommits(svnrev, want_tuple=True, names=interested_names, emails=interested_emails)])
-
-            # Regenerate cands
             cands = []
-            for cand in reverts.gen_recommits(svnrev):
-                if cand in cands_set:
-                    cands.append(cand)
+            msg = commit["comments"]
+            if not suppress_recommit:
+                cands = reverts.gen_recommits_cands(author_name, author_email)
+                git_reset(master)
 
-            git_reset(master)
-            if do_merge(cands + [svn_commit], stdout=True):
+            cand_revs = []
+            for cand in cands:
+                m = re.match(r'^recommits/r(\d+)', cand) # FIXME: Confirm it works.
+                cand_revs.append(int(m.group(1)))
+
+            if not suppress_recommit:
+                msg = "[Recommit %s] %s" % (','.join(map(lambda rev: "r%d" % rev, cand_revs)), msg)
+
+            if not suppress_recommit and do_merge(cands + [svn_commit], msg="r%d: %s" % (svnrev, msg), stdout=True):
+                commit["comments"] = msg
                 print("\tApplied r%d with %s" % (svnrev, str(cands)))
-                for cand in cands:
-                    m = re.match(r'^recommits/r%d', cand)
-                    if m:
-                        branches.may_graduate(int(m.group(1)))
+                for rev in cand_revs:
+                    branches.may_graduate(rev)
                 # FIXME: Mark proerty as it is synthesized
             else:
                 # Chain revert
@@ -955,8 +1040,8 @@ for commit in collect_commits(p.stdout):
         msg = "Recommit: %s" % str(chain_recommit)
 
         git_reset(master)
-        assert do_merge(chain_recommit, stdout=True, name=author_name, email=author_email, msg=msg)
         print("\tRecommit for %s: %s" % (author_name, str(chain_recommit)))
+        assert do_merge(chain_recommit, stdout=True, name=author_name, email=author_email, msg=msg)
 
         head = git_head()
         # FIXME: Mark it synthesized.
@@ -989,7 +1074,7 @@ for commit in collect_commits(p.stdout):
             if post_commit(commit):
                 print("\tRecommit for %s: done." % author_name)
                 for recommit in chain_recommit:
-                    m = re.match(r'^recommits/r%d', cand)
+                    m = re.match(r'^recommits/r(\d+)', recommit)
                     if m:
                         branches.may_graduate(int(m.group(1)))
                 run_cmd(["git", "branch", "-f", "master", master])
