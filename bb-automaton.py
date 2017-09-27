@@ -229,16 +229,24 @@ class BranchManager:
                 "git", "log",
                 "--no-walk",
                 "--branches", "--remotes=dev",
-                "--format=%aN%H%d%aE",
+                "--format=%B%aN%H%d%aE",
                 ],
             stdout=subprocess.PIPE,
             )
 
+        body = []
         for line in p.stdout:
             r = {}
             m = re.match(r'^(.+)([0-9a-z]{40})\s*\(([^\)]+)\)(\S+)', line)
+            if not m:
+                body.append(line)
+                continue
             assert m, "<%s>" % line.rstrip()
             name,h,refs,email = m.groups()
+
+            bba = None
+            if len(body) >= 4 and body[2] == "{\n":
+                bba = json.loads(''.join(body[2:]))
 
             for ref in refs.split(', '):
                 if re.match(r'^dev/('+'|'.join(generated + ignored)+')', ref):
@@ -255,6 +263,9 @@ class BranchManager:
                     email=email,
                     h=h,
                     )
+                if bba is not None:
+                    d[rr]["bba"] = bba
+            body = []
 
         p.wait()
 
@@ -302,7 +313,7 @@ class BranchManager:
     # They can be removed later.
     def may_graduate(self, svnrev):
         ref = self.recommit_ref(svnrev)
-        run_cmd(["git", "branch", "-f", "graduates/%s" % ref, ref], stdout=True)
+        run_cmd(["git", "branch", "-f", "graduates/r%d" % svnrev, ref], stdout=True)
 
     def graduate(self, svnrev):
         ref = self.recommit_ref(svnrev)
@@ -371,6 +382,10 @@ class RevertController:
 
         # FIXME: Do smarter!
         self._svnrevs.sort(key=lambda x: -x)
+
+    def graduate(self, svnrev):
+        _svnrevs.remove(svnrev)
+        _branches.graduate(svnrev)
 
     # def remove(self, svnrev):
     #     self._svnrevs.remove(svnrev)
@@ -664,6 +679,7 @@ culprit_svnrev = None
 culprit_svnrevs = {}
 ss_info = {}
 first_ss = None
+min_green_rev = sys.maxint
 
 for builder in builders["builders"]:
     builderid = builder["builderid"]
@@ -699,6 +715,7 @@ for builder in builders["builders"]:
 
     print("%d : %s" % (result, builder["name"]))
     if result == 2:
+        min_green_rev = 0
         ss,max_ss,max_rev = get_culprit_ss(builder)
         if ss is None:
             continue
@@ -708,6 +725,7 @@ for builder in builders["builders"]:
             buildid=build["buildid"],
             buildNumber=build["number"],
             builderName=builder["name"],
+            svnrev=ss["revision"],
             max_rev=max_rev,
             )
 
@@ -720,6 +738,18 @@ for builder in builders["builders"]:
 
         if first_ss is None or first_ss["ssid"] > ss["ssid"]:
             first_ss = ss
+    elif result in (0,1):
+        if "revision" not in build["properties"]:
+            continue
+        # Ignore rXXX+rXXX
+        m = re.match(r'^r(\d+)$', build["properties"]["revision"][0])
+        if not m:
+            continue
+        rev = int(m.group(1))
+        if min_green_rev > rev:
+            min_green_rev = rev
+    else:
+        min_green_rev = 0
 
 if first_ss:
     print("========Culprit is %s to r%d\n(%s)" % (first_ss["revision"], ss_info[first_ss["ssid"]]["max_rev"], first_ss["project"]))
@@ -729,6 +759,7 @@ if first_ss:
 
 branches = BranchManager(
     generated = [
+        "graduates/",
         "recommits/",
         "rejected/",
         "reverts/",
@@ -740,6 +771,22 @@ branches = BranchManager(
         "test/master",
         ],
     )
+
+if not first_ss and 0 < min_green_rev and min_green_rev < sys.maxint:
+    revs = []
+    for rs in sorted(branches["graduates"].keys()):
+        m = re.match(r'^r(\d+)', rs)
+        svnrev = int(m.group(1))
+        if svnrev >= min_green_rev:
+            continue
+        revs.append("graduates/%s" % rs)
+        if rs in branches["reverts"]:
+            revs.append("reverts/%s" % rs)
+        if rs in branches["recommits"]:
+            revs.append("recommits/%s" % rs)
+        print("\t%s is graduated to the heaven." % rs)
+    if revs:
+        run_cmd(["git", "branch", "-D"] + revs, stdout=True)
 
 reverts = RevertController(branches)
 topics_man = TopicsManager()
@@ -904,7 +951,7 @@ for commit in collect_commits(p.stdout):
         assert r
         graduated.append(git_head())
 
-        branches.graduate(revert_svnrev)
+        reverts.graduate(revert_svnrev)
 
     # Check graduation for staged topics
     for topic_svnrev,topics in staged_topics.items():
