@@ -612,20 +612,7 @@ for commit in collect_commits(p.stdout):
                 continue
 
             # Retrieve original message
-            p = subprocess.Popen(
-                [
-                    "git", "log",
-                    "--no-walk",
-                    "--format=raw",
-                    "--stat=1024,1000",
-                    staged_ref,
-                    ],
-                stdout=subprocess.PIPE,
-                )
-            commits = list(collect_commits(p.stdout))
-            assert p.wait() == 0
-            assert len(commits)==1
-            commit = commits[0]
+            commit = collect_single_commit(staged_ref)
 
             # FIXME: Invalidate ssid with api.
             if invalidated_ssid is not None:
@@ -654,20 +641,7 @@ p.wait()
 # (Note, collect_commits may return [])
 if last_svnrev is None:
     # Retrieve origin/master
-    p = subprocess.Popen(
-        [
-            "git", "log",
-            "--no-walk",
-            "--format=raw", "--show-notes",
-            "--stat=1024,1000",
-            upstream_commit,
-            ],
-        stdout=subprocess.PIPE,
-        )
-    commits = list(collect_commits(p.stdout))
-    assert p.wait() == 0
-    assert len(commits)==1
-    commit = commits[0]
+    commit = collect_single_commit(upstream_commit)
     m = re.match(r'r(\d+)', commit["revision"])
     assert m, commit
     last_svnrev = int(m.group(1))
@@ -697,20 +671,7 @@ for topic in unstaged_topics:
         continue
 
     # Retrieve original message
-    p = subprocess.Popen(
-        [
-            "git", "log",
-            "--no-walk",
-            "--format=raw",
-            "--stat=1024,1000",
-            topic_ref,
-        ],
-        stdout=subprocess.PIPE,
-        )
-    commits = list(collect_commits(p.stdout))
-    assert p.wait() == 0
-    assert len(commits)==1
-    commit = commits[0]
+    commit = collect_single_commit(topic_ref)
 
     # FIXME: Invalidate ssid with api.
     if invalidated_ssid is not None:

@@ -185,6 +185,7 @@ def collect_single_commit(commit):
             "git", "log",
             "--no-walk",
             "--format=raw",
+            "--show-notes",
             "--stat=1024,1000",
             commit,
             ],
