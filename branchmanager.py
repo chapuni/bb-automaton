@@ -102,11 +102,11 @@ class BranchManager:
         self.push_ref(":%s" % ref)
 
     # They can be removed later.
-    def may_graduate(self, svnrev):
-        ref = self.recommit_ref(svnrev)
-        run_cmd(["git", "branch", "-f", "graduates/r%d" % svnrev, ref], stdout=True)
+    def may_graduate(self, svnrev, revert_svnrev):
+        revert_ref = self.recommit_ref(revert_svnrev)
+        run_cmd(["git", "branch", "-f", "graduates/r%d/r%d" % (revert_svnrev, svnrev), revert_ref], stdout=True)
 
-    def graduate(self, svnrev):
-        ref = self.recommit_ref(svnrev)
-        run_cmd(["git", "branch", "-M", ref, "graduates/r%d" % svnrev], stdout=True)
-        eval_cmd(["git", "branch", "-D", ref, self.revert_ref(svnrev)], stdout=True)
+    def graduate(self, svnrev, revert_svnrev):
+        recommit_ref = self.recommit_ref(revert_svnrev)
+        run_cmd(["git", "branch", "-M", recommit_ref, "graduates/r%d/r%d" % (revert_svnrev, svnrev)], stdout=True)
+        eval_cmd(["git", "branch", "-D", self.revert_ref(revert_svnrev)], stdout=True)

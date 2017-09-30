@@ -229,6 +229,7 @@ branches = BranchManager(
         ],
     )
 
+# Graduates
 if not first_ss and 0 < min_green_rev and min_green_rev < sys.maxint:
     revs = []
     for rs in sorted(branches["graduates"].keys()):
@@ -236,7 +237,8 @@ if not first_ss and 0 < min_green_rev and min_green_rev < sys.maxint:
         svnrev = int(m.group(1))
         if svnrev >= min_green_rev:
             continue
-        revs.append("graduates/%s" % rs)
+        for ref in branches["graduates"][rs]:
+            revs.append("graduates/%s/%s" % (rs, ref))
         if rs in branches["reverts"]:
             revs.append("reverts/%s" % rs)
         if rs in branches["recommits"]:
@@ -329,6 +331,24 @@ if first_ss is not None:
             run_cmd(["git", "branch", "-f", "master", master])
 
     if do_rewind:
+        # Remain incoming "graduated" commits.
+        m = re.match(r'^r(\d+)', first_ss["revision"])
+        assert m
+        svnrev = int(m.group(1))
+        remains = []
+        for grad_ref,grads in branches["graduates"].items():
+            for grad_at in grads.keys():
+                m = re.match(r'r(\d+)', grad_at)
+                assert m
+                if int(m.group(1)) < svnrev:
+                    continue
+                ref = "graduates/%s/%s" % (grad_ref, grad_at)
+                print("\t%s remains." % ref)
+                remains.append(ref)
+
+        if remains:
+            run_cmd(["git", "branch", "-D"] + remains, stdout=True)
+
         # Calculate range(ssid) to invalidate previous builds
         # Get the latest ss.
         resp = urlopen(api_url+'sourcestamps?limit=1&order=-ssid')
@@ -410,7 +430,7 @@ for commit in collect_commits(p.stdout):
         assert r
         graduated.append(git_head())
 
-        reverts.graduate(revert_svnrev)
+        reverts.graduate(svnrev, revert_svnrev)
 
     # Check graduation for staged topics
     for topic_svnrev,topics in staged_topics.items():
@@ -475,7 +495,7 @@ for commit in collect_commits(p.stdout):
             # if files are present but commit is empty, check graduation.
             head = git_head()
             if commit["files"]:
-                reverts.check_graduated(svn_commit)
+                reverts.check_graduated(svnrev, svn_commit)
                 git_reset(head)
 
             if not suppress_recommit:
@@ -505,7 +525,7 @@ for commit in collect_commits(p.stdout):
                 commit["comments"] = msg
                 print("\tApplied r%d with %s" % (svnrev, str(cands)))
                 for rev in cand_revs:
-                    branches.may_graduate(rev)
+                    branches.may_graduate(svnrev, rev)
                 # FIXME: Mark proerty as it is synthesized
             else:
                 # Chain revert
@@ -578,7 +598,7 @@ for commit in collect_commits(p.stdout):
                 for recommit in chain_recommit:
                     m = re.match(r'^recommits/r(\d+)', recommit)
                     if m:
-                        branches.may_graduate(int(m.group(1)))
+                        branches.may_graduate(svnrev, int(m.group(1)))
                 run_cmd(["git", "branch", "-f", "master", master])
         else:
             print("\tRecommit for %s: (skipped due to empty commit)" % author_name)

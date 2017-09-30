@@ -66,13 +66,9 @@ class RevertManager:
         # FIXME: Do smarter!
         self._svnrevs.sort(key=lambda x: -x)
 
-    def graduate(self, svnrev):
-        self._svnrevs.remove(svnrev)
-        self._branches.graduate(svnrev)
-
-    # def remove(self, svnrev):
-    #     self._svnrevs.remove(svnrev)
-    #     run_cmd(["git", "branch", "-D", self.refspec(svnrev), self.refspec_m(svnrev)], stdout=True)
+    def graduate(self, svnrev, revert_svnrev):
+        self._svnrevs.remove(revert_svnrev)
+        self._branches.graduate(svnrev, revert_svnrev)
 
     # This moves HEAD
     def revert(self, svn_commit, svnrev, master, msg=None, name=None, email=None):
@@ -202,14 +198,14 @@ class RevertManager:
 
         run_cmd(["git", "branch", "-f", recommit_ref, git_head()], stdout=True)
 
-    def check_graduated(self, svn_commit):
+    def check_graduated(self, svnrev, svn_commit):
         git_reset(svn_commit)
         # Check merge commit (HEAD) is empty
         if not eval_cmd("git diff --quiet HEAD^ HEAD"):
             return
 
-        for svnrev in self._svnrevs:
-            revert_ref = self.refspec(svnrev)
+        for revert_svnrev in self._svnrevs:
+            revert_ref = self.refspec(revert_svnrev)
             if not do_merge([revert_ref], commit=False, GIT_AUTHOR_NAME=name, GIT_AUTHOR_EMAIL=email):
                 git_reset()
                 continue
@@ -217,6 +213,5 @@ class RevertManager:
                 continue
 
             git_reset()
-            print("\tr%d has been graduated." % svnrev)
-            self._branches.graduate(svnrev)
-            #run_cmd(["git", "branch", "-D", revert_ref, self.refspec_m(svnrev)], stdout=True)
+            print("\tr%d has been graduated." % revert_svnrev)
+            self._branches.graduate(svnrev, revert_svnrev)
