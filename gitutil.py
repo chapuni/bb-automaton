@@ -61,6 +61,24 @@ def do_merge(commits, msg=None, ff=False, commit=True, **kwargs):
 # This depends on "master"
 def attempt_merge(commit, cands):
     head = git_head()
+
+    # Prune from tail
+    i = len(cands) - 1
+    while cands and i >= 0:
+        target_rev = cands[i]
+        cand = cands[:]
+        cand.pop(i)
+        git_reset(head)
+        r = do_merge(cand + [commit], commit=False)
+        if r:
+            print("\tRecommit: <%s>: Removing should be safe." % target_rev)
+            cands.pop(i)
+        else:
+            # Failed. Try next.
+            print("\tRecommit: <%s>: It was essential. " % target_rev)
+        i -= 1
+
+    # Prune frome head
     i = 0
     while cands and i < len(cands):
         target_rev = cands[i]
