@@ -170,7 +170,9 @@ for builder in builders["builders"]:
         if json.loads(build["properties"]["blamed"][0]).get("event") == "BLAME":
             result = 2
 
-    print("%d : %s" % (result, builder["name"]))
+    if result not in (0,1):
+        print("%d : %s" % (result, builder["name"]))
+
     if result == 2:
         min_green_rev = 0
         ss,max_ss,max_rev = get_culprit_ss(builder)
