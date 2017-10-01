@@ -489,17 +489,16 @@ for commit in collect_commits(p.stdout):
                     git_reset(head)
         else:
             cands = []
+            cand_revs = []
             msg = commit["comments"]
             if not suppress_recommit:
                 cands = reverts.gen_recommits_cands(svn_commit, svnrev, author_name, author_email)
                 git_reset(master)
 
-            cand_revs = []
-            for cand in cands:
-                m = re.match(r'^recommits/r(\d+)', cand) # FIXME: Confirm it works.
-                cand_revs.append(int(m.group(1)))
+                for cand in cands:
+                    m = re.match(r'^recommits/r(\d+)', cand) # FIXME: Confirm it works.
+                    cand_revs.append(int(m.group(1)))
 
-            if not suppress_recommit:
                 msg = "[Recommit %s] %s" % (','.join(map(lambda rev: "r%d" % rev, cand_revs)), msg)
 
             if not suppress_recommit and do_merge(cands + [svn_commit], msg="r%d: %s" % (svnrev, msg), stdout=True):
