@@ -443,10 +443,7 @@ for commit in collect_commits(p.stdout):
     local_reverts = []
     if svnrev in reverts:
         print("\trevert: Checking r%d" % svnrev)
-        for revert_svnrev in reverts:
-            if revert_svnrev > svnrev:
-                continue
-            local_reverts.append(reverts.refspec(revert_svnrev))
+        local_reverts.append(reverts.refspec(svnrev))
         assert local_reverts
         if do_merge(local_reverts, ff=False, name=author_name, email=author_email):
             print("\trevert: Applied %s" % str(local_reverts))
