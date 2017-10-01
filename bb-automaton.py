@@ -232,18 +232,21 @@ branches = BranchManager(
 # Graduates
 if not first_ss and 0 < min_green_rev and min_green_rev < sys.maxint:
     revs = []
-    for rs in sorted(branches["graduates"].keys()):
-        m = re.match(r'^r(\d+)', rs)
+    for ref0,grads in branches["graduates"].items():
+        m = re.match(r'^r(\d+)', ref0)
         svnrev = int(m.group(1))
-        if svnrev >= min_green_rev:
-            continue
-        for ref in branches["graduates"][rs]:
-            revs.append("graduates/%s/%s" % (rs, ref))
-        if rs in branches["reverts"]:
-            revs.append("reverts/%s" % rs)
-        if rs in branches["recommits"]:
-            revs.append("recommits/%s" % rs)
-        print("\t%s is graduated to the heaven." % rs)
+        for ref1 in grads.keys():
+            m = re.match(r'^r(\d+)', ref1)
+            grad_rev = int(m.group(1))
+            if grad_rev >= min_green_rev:
+                continue
+            revs.append("graduates/%s/%s" % (ref0, ref1))
+            if ref0 in branches["reverts"]:
+                revs.append("reverts/%s" % ref0)
+            if ref0 in branches["recommits"]:
+                revs.append("recommits/%s" % ref0)
+            print("\t%s is graduated to the heaven." % ref0)
+
     if revs:
         run_cmd(["git", "branch", "-D"] + revs, stdout=True)
 
