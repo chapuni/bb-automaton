@@ -273,10 +273,10 @@ run_cmd(["git", "checkout", "-qf", master])
 invalidated_ssid = None
 if first_ss is not None:
     do_rewind = False
-    svn_commit = git_merge_base(first_ss["project"], upstream_commit)
 
     for svnrev in sorted(culprit_svnrevs.keys()):
         ss = culprit_svnrevs[svnrev]
+        svn_commit = git_merge_base(ss["project"], upstream_commit)
         orig_commit = collect_single_commit(svn_commit)
         author = orig_commit["author"]
         m = re.match(r'^(.+)\s<([^>]*)>$', author)
@@ -287,6 +287,8 @@ if first_ss is not None:
                 name=name,
                 email=email,
                 ))
+
+    svn_commit = git_merge_base(first_ss["project"], upstream_commit)
 
     if culprit_svnrev is not None:
         revert_ref = reverts.refspec(culprit_svnrev)
