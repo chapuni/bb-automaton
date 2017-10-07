@@ -277,7 +277,7 @@ master = branches["master"]["h"]
 run_cmd(["git", "checkout", "-qf", master])
 
 # Seek culprit rev, rewind and revert
-invalidated_ssid = None
+invalidated_changes = None
 if first_ss is not None:
     do_rewind = False
 
@@ -355,12 +355,17 @@ if first_ss is not None:
             run_cmd(["git", "branch", "-D"] + remains, stdout=True)
 
         # Calculate range(ssid) to invalidate previous builds
-        # Get the latest ss.
-        resp = urlopen(api_url+'sourcestamps?limit=1&order=-ssid')
-        sourcestamps = json.load(resp)
+        resp = urlopen(api_url+'changes?project=%s' % first_ss["project"])
+        changes = json.load(resp)
         resp.close()
-        # FIXME: Assumes ssid equal chid.
-        invalidated_ssid = "%d..%d" % (first_ss["ssid"], sourcestamps["sourcestamps"][0]["ssid"])
+        ch_a = changes["changes"][0]["changeid"]
+        # Get the latest change.
+        resp = urlopen(api_url+'changes?limit=1&order=-changeid')
+        changes = json.load(resp)
+        resp.close()
+        ch_b = changes["changes"][0]["changeid"]
+        invalidated_changes = "%d..%d" % (ch_a, ch_b)
+        print("========Rewind to r%d (Invalidate %s)" % (culprit_svnrev, invalidated_changes))
 else:
     # FIXME: Seek diversion of upstream
     pass
@@ -401,8 +406,8 @@ for commit in collect_commits(p.stdout):
     author_email = m.group(2)
 
     # FIXME: Invalidate ssid with api.
-    if invalidated_ssid is not None:
-        props["invalidated_changes"] = invalidated_ssid
+    if invalidated_changes is not None:
+        props["invalidated_changes"] = invalidated_changes
 
     print("========Processing r%d" % svnrev)
 
@@ -589,8 +594,8 @@ for commit in collect_commits(p.stdout):
             }
 
         # FIXME: Invalidate ssid with api.
-        if invalidated_ssid is not None:
-            commit["properties"]["invalidated_changes"] = invalidated_ssid
+        if invalidated_changes is not None:
+            commit["properties"]["invalidated_changes"] = invalidated_changes
 
         commit["files"]=git_diff_files("master")
         if commit["files"]:
@@ -638,8 +643,8 @@ for commit in collect_commits(p.stdout):
             commit = collect_single_commit(staged_ref)
 
             # FIXME: Invalidate ssid with api.
-            if invalidated_ssid is not None:
-                commit["properties"]["invalidated_changes"] = invalidated_ssid
+            if invalidated_changes is not None:
+                commit["properties"]["invalidated_changes"] = invalidated_changes
 
             commit["revision"] = "dev/%s" % topic
             commit["revlink"] = "https://github.com/llvm-project/llvm-project-dev/commits/%s" % staged_ref
@@ -697,8 +702,8 @@ for topic in unstaged_topics:
     commit = collect_single_commit(topic_ref)
 
     # FIXME: Invalidate ssid with api.
-    if invalidated_ssid is not None:
-        commit["properties"]["invalidated_changes"] = invalidated_ssid
+    if invalidated_changes is not None:
+        commit["properties"]["invalidated_changes"] = invalidated_changes
 
     commit["revision"] = "dev/%s" % topic
     commit["revlink"] = "https://github.com/llvm-project/llvm-project-dev/commits/%s" % staged_ref
