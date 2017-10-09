@@ -1,3 +1,4 @@
+import json
 import subprocess
 
 from cmds import *
@@ -71,8 +72,13 @@ class RevertManager:
         self._branches.graduate(svnrev, revert_svnrev)
 
     # This moves HEAD
-    def revert(self, svn_commit, svnrev, master, msg=None, name=None, email=None):
+    def revert(self, svn_commit, svnrev, master, msg=None, bba=None, name=None, email=None):
         git_reset(svn_commit)
+
+        if bba:
+            assert msg is None, "msg doesn't make sense here"
+            msg = "Revert r%d: %s\n\n" % (svnrev, bba["author"])
+            msg += json.dumps(bba, indent=2, sort_keys=True)
 
         if msg:
             run_cmd(["git", "revert", "--no-commit", svn_commit])
@@ -104,7 +110,7 @@ class RevertManager:
         print("\t*** Revert %s" % revert_ref)
 
         # At last, make reverts branch.
-        run_cmd(["git", "branch", "-f", revert_ref, revert_h])
+        self._branches.revert(svnrev, revert_h, bba=bba)
 
         return revert_h
 
@@ -215,3 +221,23 @@ class RevertManager:
             git_reset()
             print("\tr%d has been graduated." % revert_svnrev)
             self._branches.graduate(svnrev, revert_svnrev)
+
+    def build_status(self, svnrev):
+        status = dict(builders={}, blamed=[])
+        for rev,item in self._branches["reverts"].items():
+            if rev in self._branches["graduates"]:
+                continue
+            m = re.match(r'r(\d+)', rev)
+            assert m
+            revert_svnrev = int(m.group(1))
+            bba = item["bba"]
+            if revert_svnrev <= svnrev and "builderid" in bba:
+                n = status["builders"].get(bba["builderid"], 0)
+                status["builders"][bba["builderid"]] = n + 1
+                if bba["author"] not in status["blamed"]:
+                    status["blamed"].append(bba["author"])
+        if not status["builders"]:
+            del status["builders"]
+        if not status["blamed"]:
+            del status["blamed"]
+        return status

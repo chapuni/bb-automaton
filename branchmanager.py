@@ -65,7 +65,12 @@ class BranchManager:
         return i in self._branches
 
     def __getitem__(self, i):
-        return self._branches[i]
+        item = self._branches
+        for rr in i.split('/'):
+            if rr not in item:
+                item[rr] = {}
+            item = item[rr]
+        return item
 
     def keys(self):
         return self._branches.keys()
@@ -96,17 +101,35 @@ class BranchManager:
     def recommit_ref(svnrev):
         return "recommits/r%d" % svnrev
 
+    def revert(self, svnrev, commit, bba=None):
+        ref = self.revert_ref(svnrev)
+        run_cmd(["git", "branch", "-f", ref, commit])
+        if bba:
+            print(self[ref])
+            self[ref]["bba"] = bba
+
     # Basic ref methods
     def remove(self, ref):
         run_cmd(["git", "branch", "-D", ref])
         self.push_ref(":%s" % ref)
 
+        rs = ref.split('/')
+        tail = rs.pop()
+        item = self.branches
+        for rr in rs:
+            item = item[rr]
+        del item[tail]
+
     # They can be removed later.
     def may_graduate(self, svnrev, revert_svnrev):
         revert_ref = self.recommit_ref(revert_svnrev)
-        run_cmd(["git", "branch", "-f", "graduates/r%d/r%d" % (revert_svnrev, svnrev), revert_ref], stdout=True)
+        grad_ref = "graduates/r%d/r%d" % (revert_svnrev, svnrev)
+        run_cmd(["git", "branch", "-f", grad_ref, revert_ref], stdout=True)
+        self._branches["graduates"]["r%d" % revert_svnrev] = {"r%d" % svnrev: {}}
 
     def graduate(self, svnrev, revert_svnrev):
         recommit_ref = self.recommit_ref(revert_svnrev)
-        run_cmd(["git", "branch", "-M", recommit_ref, "graduates/r%d/r%d" % (revert_svnrev, svnrev)], stdout=True)
+        grad_ref = "graduates/r%d/r%d" % (revert_svnrev, svnrev)
+        run_cmd(["git", "branch", "-M", recommit_ref, grad_ref], stdout=True)
         eval_cmd(["git", "branch", "-D", self.revert_ref(revert_svnrev)], stdout=True)
+        self._branches["graduates"]["r%d" % revert_svnrev] = {"r%d" % svnrev: {}}

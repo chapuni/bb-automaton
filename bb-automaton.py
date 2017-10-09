@@ -184,13 +184,14 @@ for builder in builders["builders"]:
             buildid=build["buildid"],
             buildNumber=build["number"],
             builderName=builder["name"],
-            svnrev=ss["revision"],
+            revision=ss["revision"],
             max_rev=max_rev,
             )
 
         m_svnrev = re.match(r'^r(\d+)$', ss["revision"])
         if m_svnrev:
             svnrev = int(m_svnrev.group(1))
+            ss_info[ss["ssid"]]["svnrev"] = svnrev
             if svnrev in culprit_svnrevs:
                 continue
             culprit_svnrevs[svnrev] = ss
@@ -317,9 +318,7 @@ if first_ss is not None:
                 svn_commit = git_merge_base(head, upstream_commit)
                 print("head=%s master=%s svn=%s" % (head, master, svn_commit))
                 si = ss_info[ss["ssid"]]
-                msg = "Revert r%d: %s\n\n" % (svnrev, si["author"])
-                msg += json.dumps(ss_info[ss["ssid"]], indent=2, sort_keys=True)
-                revert_h = reverts.revert(svn_commit, svnrev, head, msg=msg)
+                revert_h = reverts.revert(svn_commit, svnrev, head, bba=ss_info[ss["ssid"]])
                 reverts.make_recommit(svn_commit, svnrev, revert_h, name=si["name"], email=si["email"])
     else:
         # Doesn't revert. Just skip.
@@ -365,7 +364,7 @@ if first_ss is not None:
         resp.close()
         ch_b = changes["changes"][0]["changeid"]
         invalidated_changes = "%d..%d" % (ch_a, ch_b)
-        print("========Rewind to r%d (Invalidate %s)" % (culprit_svnrev, invalidated_changes))
+        print("========Rewind to r%d (Invalidate %s)" % (svnrev, invalidated_changes))
 else:
     # FIXME: Seek diversion of upstream
     pass
@@ -400,6 +399,8 @@ for commit in collect_commits(p.stdout):
         "commit": svn_commit,
         }
     del commit["commit"]
+
+    bba = {}
 
     m = re.match(r'^(.+)\s<([^>]*)>$', commit["author"])
     author_name = m.group(1)
@@ -517,6 +518,8 @@ for commit in collect_commits(p.stdout):
                 if interests:
                     chain_recommit = reverts.gen_recommits_cands(svn_commit, svnrev, author_name, author_email)
                     git_reset(head)
+                    bba["soft"] = True
+
         else:
             cands = []
             cand_revs = []
@@ -538,8 +541,16 @@ for commit in collect_commits(p.stdout):
                     branches.may_graduate(svnrev, rev)
                 # FIXME: Mark proerty as it is synthesized
             else:
+                # This doesn't affect to build.
+                revert_bba = dict(
+                    author=commit["author"],
+                    name=author_name,
+                    email=author_email,
+                    revision=commit["revision"],
+                    svnrev=svnrev,
+                    )
                 # Chain revert
-                revert_h = reverts.revert(svn_commit, svnrev, master)
+                revert_h = reverts.revert(svn_commit, svnrev, master, bba=revert_bba)
                 commit["files"]=set()
                 revert_ref = reverts.refspec(svnrev)
                 git_reset(master)
@@ -551,6 +562,11 @@ for commit in collect_commits(p.stdout):
                 head = git_head()
                 reverts.make_recommit(svn_commit, svnrev, head, name=author_name, email=author_email)
                 git_reset(head)
+
+    bba.update(reverts.build_status(svnrev))
+    if bba:
+        print(json.dumps(bba, indent=2))
+        props["bba"] = json.dumps(bba)
 
     # Make actual changes
     commit["files"] = git_diff_files(master)
