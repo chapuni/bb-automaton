@@ -566,7 +566,7 @@ for commit in collect_commits(p.stdout):
     bba.update(reverts.build_status(svnrev))
     if bba:
         print(json.dumps(bba, indent=2))
-        props["bba"] = json.dumps(bba)
+        props["bba"] = bba
 
     # Make actual changes
     commit["files"] = git_diff_files(master)
