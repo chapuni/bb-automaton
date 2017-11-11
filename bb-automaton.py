@@ -441,7 +441,7 @@ for commit in collect_commits(p.stdout):
         assert r
         graduated.append(git_head())
 
-        reverts.graduate(svnrev, revert_svnrev)
+        reverts.may_graduate(svnrev, revert_svnrev)
 
     # Check graduation for staged topics
     for topic_svnrev,topics in staged_topics.items():
@@ -538,7 +538,7 @@ for commit in collect_commits(p.stdout):
                 commit["comments"] = msg
                 print("\tApplied r%d with %s" % (svnrev, str(cands)))
                 for rev in cand_revs:
-                    branches.may_graduate(svnrev, rev)
+                    reverts.may_graduate(svnrev, rev)
                 # FIXME: Mark proerty as it is synthesized
             else:
                 # This doesn't affect to build.
@@ -624,7 +624,7 @@ for commit in collect_commits(p.stdout):
                 for recommit in chain_recommit:
                     m = re.match(r'^recommits/r(\d+)', recommit)
                     if m:
-                        branches.may_graduate(svnrev, int(m.group(1)))
+                        reverts.may_graduate(svnrev, int(m.group(1)))
                 run_cmd(["git", "branch", "-f", "master", master])
         else:
             print("\tRecommit for %s: (skipped due to empty commit)" % author_name)

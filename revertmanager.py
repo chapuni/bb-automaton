@@ -71,6 +71,10 @@ class RevertManager:
         self._svnrevs.remove(revert_svnrev)
         self._branches.graduate(svnrev, revert_svnrev)
 
+    def may_graduate(self, svnrev, revert_svnrev):
+        self._svnrevs.remove(revert_svnrev)
+        self._branches.may_graduate(svnrev, revert_svnrev)
+
     # This moves HEAD
     def revert(self, svn_commit, svnrev, master, msg=None, bba=None, name=None, email=None):
         git_reset(svn_commit)
@@ -118,6 +122,9 @@ class RevertManager:
         for rev in reversed(self._svnrevs):
             if svnrev is not None and rev >= svnrev:
                 break
+
+            if "r%d" % rev in self._branches["graduates"]:
+                continue
 
             if not want_tuple:
                 yield self.refspec_m(rev)
@@ -241,3 +248,5 @@ class RevertManager:
         if not status["blamed"]:
             del status["blamed"]
         return status
+
+# EOF
